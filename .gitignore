@@ -1,0 +1,58 @@
+# Backup files
+*.bak
+*.backup
+*~
+*.swp
+*.swo
+*.swn
+
+# Editor directories
+.idea/
+.vscode/
+*.sublime-project
+*.sublime-workspace
+
+# OS generated files
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
+Thumbs.db
+
+# Logs
+*.log
+logs/
+
+# Temporary files
+*.tmp
+*.temp
+tmp/
+temp/
+
+# Shell script artifacts
+*.sh.x
+*.sh.x.c
+
+# Test output
+test-results/
+coverage/
+
+# Local configuration overrides
+*.local
+*.local.sh
+config.local
+
+# Sensitive data
+*.key
+*.pem
+*.crt
+*.env
+.env.*
+secrets/
+credentials/
+
+# Installation artifacts
+*.iso
+*.img
