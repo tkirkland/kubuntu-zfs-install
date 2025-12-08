@@ -1,4 +1,5 @@
 #!/bin/bash
+#bashsupport disable=GrazieInspection
 #
 # Kubuntu 24.10 Installation Script with ZFS and LUKS Encryption
 #
@@ -13,7 +14,7 @@
 # Style: Google Shell Style Guide
 #
 # Usage:
-#   sudo ./kubuntu-zfs-install.sh [--disk DISK] [--hostname NAME] [--user USER]
+#   sudo ./kubuntu_zfs_install.sh [--disk disk] [--hostname NAME] [--user USER]
 #
 # Requirements:
 #   - Boot from Kubuntu live USB
@@ -48,87 +49,59 @@ readonly DATASET_VBOX="${POOL_NAME}/VirtualBox"
 readonly INSTALL_POINT="/mnt/install"
 
 # Color codes for output (empty if not terminal)
-if [[ -t 1 ]]; then
-  readonly RED='\033[0;31m'
-  readonly GREEN='\033[0;32m'
-  readonly YELLOW='\033[0;33m'
-  readonly BLUE='\033[0;34m'
-  readonly NC='\033[0m'  # No Color
-else
-  readonly RED=''
-  readonly GREEN=''
-  readonly YELLOW=''
-  readonly BLUE=''
-  readonly NC=''
-fi
 
-#######################################
-# Global variables (set during runtime)
-#######################################
-DISK=""
-HOSTNAME_TARGET=""
-USERNAME=""
-SWAP_SIZE_GB="${DEFAULT_SWAP_SIZE_GB}"
-INTERACTIVE=true
 
-# Partition variables (populated after partitioning)
-PART_EFI=""
-PART_BOOT=""
-PART_SWAP=""
-PART_DATA=""
-UUID_SWAP=""
-UUID_DATA=""
 
 #######################################
 # Print error message to stderr.
 # Globals:
-#   RED, NC
+#   red, nc
 # Arguments:
 #   Error message string
 # Outputs:
 #   Writes error message to stderr
 #######################################
 err() {
-  echo -e "${RED}[ERROR]${NC} $*" >&2
+  echo -e "${red}[ERROR]${nc} $*" >&2
 }
 
 #######################################
 # Print warning message to stderr.
 # Globals:
-#   YELLOW, NC
+#   yellow, nc
 # Arguments:
 #   Warning message string
 # Outputs:
-#   Writes warning message to stderr
+#   Writes the warning message to stderr
 #######################################
 warn() {
-  echo -e "${YELLOW}[WARN]${NC} $*" >&2
+  echo -e "${yellow}[WARN]${nc} $*" >&2
 }
 
 #######################################
 # Print info message to stdout.
 # Globals:
-#   GREEN, NC
+#   green, nc
 # Arguments:
 #   Info message string
 # Outputs:
-#   Writes info message to stdout
+#   Writes an info message to stdout
 #######################################
 info() {
-  echo -e "${GREEN}[INFO]${NC} $*"
+  echo -e "${green}[INFO]${nc} $*"
 }
 
 #######################################
-# Print step header to stdout.
+# Print a step header to stdout.
 # Globals:
-#   BLUE, NC
+#   blue, nc
 # Arguments:
 #   Step description string
 # Outputs:
 #   Writes step header to stdout
 #######################################
 step() {
-  echo -e "\n${BLUE}==>${NC} $*"
+  echo -e "\n${blue}==>${nc} $*"
 }
 
 #######################################
@@ -170,7 +143,7 @@ EOF
 # Arguments:
 #   None
 # Returns:
-#   0 if root, 1 otherwise
+#   0 is root, 1 otherwise
 #######################################
 check_root() {
   if [[ "${EUID}" -ne 0 ]]; then
@@ -181,13 +154,13 @@ check_root() {
 }
 
 #######################################
-# Check if running from live environment.
+# Check if running from a live environment.
 # Globals:
 #   None
 # Arguments:
 #   None
 # Returns:
-#   0 if live environment, 1 otherwise
+#   0 in live environment, 1 otherwise
 #######################################
 check_live_environment() {
   if [[ ! -d /cdrom ]] && [[ ! -d /run/live ]]; then
@@ -199,20 +172,20 @@ check_live_environment() {
 #######################################
 # Validate disk device exists.
 # Globals:
-#   DISK
+#   disk
 # Arguments:
 #   None
 # Returns:
 #   0 if valid, 1 otherwise
 #######################################
 validate_disk() {
-  if [[ -z "${DISK}" ]]; then
+  if [[ -z "${disk}" ]]; then
     err "No disk specified. Use --disk option."
     return 1
   fi
 
-  if [[ ! -b "${DISK}" ]]; then
-    err "Disk '${DISK}' is not a valid block device"
+  if [[ ! -b "${disk}" ]]; then
+    err "Disk '${disk}' is not a valid block device"
     return 1
   fi
 
@@ -222,16 +195,16 @@ validate_disk() {
 #######################################
 # Prompt user for confirmation.
 # Globals:
-#   INTERACTIVE
+#   interactive
 # Arguments:
 #   Prompt message
 # Returns:
 #   0 if confirmed, 1 otherwise
 #######################################
 confirm() {
-  local prompt="$1"
+  local prompt="$1" response
 
-  if [[ "${INTERACTIVE}" != true ]]; then
+  if [[ "${interactive}" != true ]]; then
     return 0
   fi
 
@@ -247,7 +220,7 @@ confirm() {
 }
 
 #######################################
-# Install required packages in live environment.
+# Install required packages in a live environment.
 # Globals:
 #   None
 # Arguments:
@@ -265,7 +238,7 @@ install_live_packages() {
 #######################################
 # Calculate the last aligned sector for 4K drives.
 # Globals:
-#   DISK
+#   disk
 # Arguments:
 #   None
 # Outputs:
@@ -276,8 +249,8 @@ get_last_aligned_sector() {
   local sector_size
   local alignment
 
-  total_sectors=$(blockdev --getsz "${DISK}")
-  sector_size=$(blockdev --getss "${DISK}")
+  total_sectors=$(blockdev --getsz "${disk}")
+  sector_size=$(blockdev --getss "${disk}")
   alignment=$((4096 / sector_size))
 
   echo $(( (total_sectors / alignment) * alignment - 1 ))
@@ -286,93 +259,93 @@ get_last_aligned_sector() {
 #######################################
 # Partition the target disk.
 # Globals:
-#   DISK, EFI_SIZE_MB, BOOT_SIZE_MB, SWAP_SIZE_GB
-#   PART_EFI, PART_BOOT, PART_SWAP, PART_DATA
+#   disk, EFI_SIZE_MB, BOOT_SIZE_MB, swap_size_gb
+#   part_efi, part_boot, part_swap, part_data
 # Arguments:
 #   None
 # Returns:
 #   0 on success
 #######################################
 partition_disk() {
-  step "Partitioning disk: ${DISK}"
+  step "Partitioning disk: ${disk}"
 
   local last_sector
   last_sector=$(get_last_aligned_sector)
 
   # Determine partition naming scheme (nvme vs standard)
-  local part_prefix="${DISK}"
-  if [[ "${DISK}" == *"nvme"* ]] || [[ "${DISK}" == *"mmcblk"* ]]; then
-    part_prefix="${DISK}p"
+  local part_prefix="${disk}"
+  if [[ "${disk}" == *"nvme"* ]] || [[ "${disk}" == *"mmcblk"* ]]; then
+    part_prefix="${disk}p"
   fi
 
-  PART_EFI="${part_prefix}1"
-  PART_BOOT="${part_prefix}2"
-  PART_SWAP="${part_prefix}3"
-  PART_DATA="${part_prefix}4"
+  part_efi="${part_prefix}1"
+  part_boot="${part_prefix}2"
+  part_swap="${part_prefix}3"
+  part_data="${part_prefix}4"
 
   info "Wiping existing partition table..."
-  blkdiscard -f "${DISK}" 2>/dev/null || wipefs -a "${DISK}"
-  sgdisk --zap-all "${DISK}"
+  blkdiscard -f "${disk}" 2>/dev/null || wipefs -a "${disk}"
+  sgdisk --zap-all "${disk}"
 
   info "Creating partitions..."
 
   # EFI System Partition (ESP)
-  sgdisk --new=1:0:+${EFI_SIZE_MB}M \
+  sgdisk --new=1:0:+"${EFI_SIZE_MB}"M \
          --typecode=1:EF00 \
          --change-name=1:"EFI" \
-         "${DISK}"
+         "${disk}"
 
   # Boot partition
-  sgdisk --new=2:0:+${BOOT_SIZE_MB}M \
+  sgdisk --new=2:0:+"${BOOT_SIZE_MB}"M \
          --typecode=2:8300 \
          --change-name=2:"Boot" \
-         "${DISK}"
+         "${disk}"
 
   # Swap partition (LUKS encrypted)
-  sgdisk --new=3:0:+${SWAP_SIZE_GB}G \
+  sgdisk --new=3:0:+"${swap_size_gb}"G \
          --typecode=3:8200 \
          --change-name=3:"Swap" \
-         "${DISK}"
+         "${disk}"
 
   # Data partition (LUKS encrypted, remaining space)
   sgdisk --new=4:0:"${last_sector}" \
          --typecode=4:8309 \
          --change-name=4:"Data" \
-         "${DISK}"
+         "${disk}"
 
-  # Inform kernel of partition changes
-  partprobe "${DISK}"
+  # Inform the kernel of partition changes
+  partprobe "${disk}"
   sleep 2
 
   info "Partitions created:"
-  info "  EFI:  ${PART_EFI}"
-  info "  Boot: ${PART_BOOT}"
-  info "  Swap: ${PART_SWAP}"
-  info "  Data: ${PART_DATA}"
+  info "  EFI:  ${part_efi}"
+  info "  Boot: ${part_boot}"
+  info "  Swap: ${part_swap}"
+  info "  Data: ${part_data}"
 }
 
 #######################################
 # Retrieve partition UUIDs.
 # Globals:
-#   PART_SWAP, PART_DATA, UUID_SWAP, UUID_DATA
+#   part_swap, part_data, uuid_swap, uuid_data
 # Arguments:
 #   None
 # Returns:
 #   0 on success
 #######################################
 get_partition_uuids() {
-  UUID_SWAP=$(blkid -s UUID -o value "${PART_SWAP}")
-  UUID_DATA=$(blkid -s UUID -o value "${PART_DATA}")
+  uuid_swap=$(blkid -s UUID -o value "${part_swap}")
+  uuid_data=$(blkid -s UUID -o value "${part_data}")
 
   info "Partition UUIDs:"
-  info "  Swap: ${UUID_SWAP}"
-  info "  Data: ${UUID_DATA}"
+  info "  Swap: ${uuid_swap}"
+  info "  Data: ${uuid_data}"
 }
 
 #######################################
 # Setup LUKS encryption on partitions.
 # Globals:
-#   PART_SWAP, PART_DATA, UUID_SWAP, UUID_DATA
+#   part_swap, part_data, uuid_swap, uuid_data
 # Arguments:
 #   None
 # Returns:
@@ -393,29 +366,29 @@ setup_luks_encryption() {
 
   info "Encrypting swap partition..."
   info "You will be prompted to enter and verify a passphrase."
-  cryptsetup luksFormat "${luks_options[@]}" "${PART_SWAP}"
+  cryptsetup luksFormat "${luks_options[@]}" "${part_swap}"
 
   info "Encrypting data partition..."
   info "You will be prompted to enter and verify a passphrase."
-  cryptsetup luksFormat "${luks_options[@]}" "${PART_DATA}"
+  cryptsetup luksFormat "${luks_options[@]}" "${part_data}"
 
   # Retrieve UUIDs after LUKS formatting
   get_partition_uuids
 
   info "Opening encrypted partitions..."
-  cryptsetup luksOpen "${PART_SWAP}" "luks-${UUID_SWAP}"
-  cryptsetup luksOpen "${PART_DATA}" "luks-${UUID_DATA}"
+  cryptsetup luksOpen "${part_swap}" "luks-${uuid_swap}"
+  cryptsetup luksOpen "${part_data}" "luks-${uuid_data}"
 
   # Set persistence flags
   cryptsetup --persistent --allow-discards \
     --perf-no_read_workqueue --perf-no_write_workqueue \
-    refresh "luks-${UUID_DATA}"
+    refresh "luks-${uuid_data}"
 }
 
 #######################################
 # Create ZFS pool and datasets.
 # Globals:
-#   UUID_DATA, POOL_NAME, DATASET_ROOT, DATASET_HOME
+#   uuid_data, POOL_NAME, DATASET_ROOT, DATASET_HOME
 #   DATASET_DATA, DATASET_VBOX, DEFAULT_SYSTEM_QUOTA_GB
 # Arguments:
 #   None
@@ -425,7 +398,7 @@ setup_luks_encryption() {
 create_zfs_pool() {
   step "Creating ZFS pool and datasets"
 
-  local pool_device="/dev/mapper/luks-${UUID_DATA}"
+  local pool_device="/dev/mapper/luks-${uuid_data}"
 
   info "Creating ZFS pool: ${POOL_NAME}"
   zpool create -f \
@@ -471,7 +444,7 @@ create_zfs_pool() {
   # Disable device nodes on pool
   zfs set devices=off "${POOL_NAME}"
 
-  # Export and reimport to installation point
+  # Export and reimport to the installation point
   zpool export "${POOL_NAME}"
   zpool import -R "${INSTALL_POINT}" "${POOL_NAME}"
   zfs mount "${DATASET_ROOT}"
@@ -480,7 +453,7 @@ create_zfs_pool() {
 #######################################
 # Format and mount boot partitions.
 # Globals:
-#   PART_EFI, PART_BOOT, PART_SWAP, UUID_SWAP, INSTALL_POINT
+#   part_efi, part_boot, part_swap, uuid_swap, INSTALL_POINT
 # Arguments:
 #   None
 # Returns:
@@ -490,20 +463,20 @@ setup_boot_partitions() {
   step "Setting up boot partitions"
 
   info "Formatting boot partition as ext4..."
-  mkfs.ext4 -q -F "${PART_BOOT}"
+  mkfs.ext4 -q -F "${part_boot}"
 
   info "Formatting EFI partition as FAT32..."
-  mkfs.fat -F 32 "${PART_EFI}"
+  mkfs.fat -F 32 "${part_efi}"
 
   info "Mounting boot partitions..."
   mkdir -p "${INSTALL_POINT}/boot"
-  mount "${PART_BOOT}" "${INSTALL_POINT}/boot"
+  mount "${part_boot}" "${INSTALL_POINT}/boot"
 
   mkdir -p "${INSTALL_POINT}/boot/efi"
-  mount "${PART_EFI}" "${INSTALL_POINT}/boot/efi"
+  mount "${part_efi}" "${INSTALL_POINT}/boot/efi"
 
   info "Initializing swap..."
-  mkswap "/dev/mapper/luks-${UUID_SWAP}"
+  mkswap "/dev/mapper/luks-${uuid_swap}"
 }
 
 #######################################
@@ -526,22 +499,22 @@ bootstrap_system() {
 }
 
 #######################################
-# Configure system hostname.
+# Configure the system hostname.
 # Globals:
-#   HOSTNAME_TARGET, INSTALL_POINT
+#   hostname_target, INSTALL_POINT
 # Arguments:
 #   None
 # Returns:
 #   0 on success
 #######################################
 configure_hostname() {
-  step "Configuring hostname: ${HOSTNAME_TARGET}"
+  step "Configuring hostname: ${hostname_target}"
 
-  echo "${HOSTNAME_TARGET}" > "${INSTALL_POINT}/etc/hostname"
+  echo "${hostname_target}" > "${INSTALL_POINT}/etc/hostname"
 
   cat > "${INSTALL_POINT}/etc/hosts" <<EOF
 127.0.0.1   localhost
-127.0.1.1   ${HOSTNAME_TARGET}
+127.0.1.1   ${hostname_target}
 
 # IPv6 localhost
 ::1         localhost ip6-localhost ip6-loopback
@@ -569,7 +542,7 @@ setup_network() {
     cp -a /etc/netplan/* "${INSTALL_POINT}/etc/netplan/" 2>/dev/null || true
   fi
 
-  # Create basic DHCP configuration as fallback
+  # Create basic DHCP configuration as a fallback
   if [[ ! -f "${INSTALL_POINT}/etc/netplan/01-network.yaml" ]]; then
     cat > "${INSTALL_POINT}/etc/netplan/01-network.yaml" <<EOF
 network:
@@ -600,15 +573,16 @@ mount_chroot_dirs() {
 }
 
 #######################################
-# Generate chroot configuration script.
+# Generate the chroot configuration script.
 # Globals:
-#   HOSTNAME_TARGET, USERNAME, UUID_SWAP, UUID_DATA
-#   PART_EFI, PART_BOOT
+#   hostname_target, username, uuid_swap, uuid_data
+#   part_efi, part_boot
 # Arguments:
 #   None
 # Outputs:
-#   Writes script path to stdout
+#   Writes the script path to stdout
 #######################################
+# bashsupport disable=SpellCheckingInspection
 generate_chroot_script() {
   local script_path="${INSTALL_POINT}/tmp/chroot-setup.sh"
 
@@ -623,7 +597,7 @@ set -o errexit
 set -o nounset
 set -o pipefail
 
-# Variables passed from parent script
+# Variables passed from the parent script
 HOSTNAME_TARGET="__HOSTNAME__"
 USERNAME="__USERNAME__"
 UUID_SWAP="__UUID_SWAP__"
@@ -698,7 +672,7 @@ install_kernel() {
   # Add universe repository
   cat > /etc/apt/sources.list.d/ubuntu.sources <<EOF
 Types: deb
-URIs: http://archive.ubuntu.com/ubuntu
+URIs: https://archive.ubuntu.com/ubuntu
 Suites: oracular oracular-updates oracular-security
 Components: main restricted universe multiverse
 Signed-By: /usr/share/keyrings/ubuntu-archive-keyring.gpg
@@ -857,7 +831,7 @@ EOF
 create_user() {
   step "Creating user account: ${USERNAME}"
 
-  # Create user with disabled password initially
+  # Create a user with a disabled password initially
   useradd -m -s /bin/bash -G adm,cdrom,sudo,dip,plugdev "${USERNAME}"
 
   # Configure passwordless sudo for initial setup
@@ -887,19 +861,19 @@ main() {
   install_firefox
   create_user
 
-  info "Chroot configuration complete!"
+  info "Chroot configurations complete!"
 }
 
 main "$@"
 CHROOT_SCRIPT
 
   # Replace placeholders with actual values
-  sed -i "s|__HOSTNAME__|${HOSTNAME_TARGET}|g" "${script_path}"
-  sed -i "s|__USERNAME__|${USERNAME}|g" "${script_path}"
-  sed -i "s|__UUID_SWAP__|${UUID_SWAP}|g" "${script_path}"
-  sed -i "s|__UUID_DATA__|${UUID_DATA}|g" "${script_path}"
-  sed -i "s|__PART_EFI__|${PART_EFI}|g" "${script_path}"
-  sed -i "s|__PART_BOOT__|${PART_BOOT}|g" "${script_path}"
+  sed -i "s|__HOSTNAME__|${hostname_target}|g" "${script_path}"
+  sed -i "s|__USERNAME__|${username}|g" "${script_path}"
+  sed -i "s|__UUID_SWAP__|${uuid_swap}|g" "${script_path}"
+  sed -i "s|__UUID_DATA__|${uuid_data}|g" "${script_path}"
+  sed -i "s|__PART_EFI__|${part_efi}|g" "${script_path}"
+  sed -i "s|__PART_BOOT__|${part_boot}|g" "${script_path}"
 
   chmod +x "${script_path}"
   echo "${script_path}"
@@ -928,7 +902,7 @@ run_chroot_setup() {
 #######################################
 # Cleanup and unmount filesystems.
 # Globals:
-#   INSTALL_POINT, POOL_NAME, UUID_SWAP, UUID_DATA
+#   INSTALL_POINT, POOL_NAME, uuid_swap, uuid_data
 # Arguments:
 #   None
 # Returns:
@@ -958,8 +932,8 @@ cleanup() {
   zpool export -a 2>/dev/null || true
 
   # Close LUKS devices
-  cryptsetup luksClose "luks-${UUID_SWAP}" 2>/dev/null || true
-  cryptsetup luksClose "luks-${UUID_DATA}" 2>/dev/null || true
+  cryptsetup luksClose "luks-${uuid_swap}" 2>/dev/null || true
+  cryptsetup luksClose "luks-${uuid_data}" 2>/dev/null || true
 
   info "Cleanup complete."
 }
@@ -967,7 +941,7 @@ cleanup() {
 #######################################
 # Parse command line arguments.
 # Globals:
-#   DISK, HOSTNAME_TARGET, USERNAME, SWAP_SIZE_GB, INTERACTIVE
+#   disk, hostname_target, username, swap_size_gb, interactive
 # Arguments:
 #   Command line arguments
 # Returns:
@@ -977,23 +951,23 @@ parse_args() {
   while [[ $# -gt 0 ]]; do
     case "$1" in
       -d|--disk)
-        DISK="$2"
+        disk="$2"
         shift 2
         ;;
       -h|--hostname)
-        HOSTNAME_TARGET="$2"
+        hostname_target="$2"
         shift 2
         ;;
       -u|--user)
-        USERNAME="$2"
+        username="$2"
         shift 2
         ;;
       -s|--swap)
-        SWAP_SIZE_GB="$2"
+        swap_size_gb="$2"
         shift 2
         ;;
       -y|--yes)
-        INTERACTIVE=false
+        interactive=false
         shift
         ;;
       --help)
@@ -1010,33 +984,33 @@ parse_args() {
 #######################################
 # Prompt for missing required values.
 # Globals:
-#   DISK, HOSTNAME_TARGET, USERNAME, INTERACTIVE
+#   disk, hostname_target, username, interactive
 # Arguments:
 #   None
 # Returns:
 #   0 on success
 #######################################
 prompt_missing_values() {
-  if [[ -z "${DISK}" ]]; then
+  if [[ -z "${disk}" ]]; then
     info "Available disks:"
     lsblk -d -o NAME,SIZE,MODEL | grep -v "^loop"
     echo ""
-    read -r -p "Enter target disk (e.g., /dev/nvme0n1): " DISK
+    read -r -p "Enter target disk (e.g., /dev/nvme0n1): " disk
   fi
 
-  if [[ -z "${HOSTNAME_TARGET}" ]]; then
-    read -r -p "Enter system hostname: " HOSTNAME_TARGET
+  if [[ -z "${hostname_target}" ]]; then
+    read -r -p "Enter system hostname: " hostname_target
   fi
 
-  if [[ -z "${USERNAME}" ]]; then
-    read -r -p "Enter primary username: " USERNAME
+  if [[ -z "${username}" ]]; then
+    read -r -p "Enter primary username: " username
   fi
 }
 
 #######################################
 # Display installation summary.
 # Globals:
-#   DISK, HOSTNAME_TARGET, USERNAME, SWAP_SIZE_GB
+#   disk, hostname_target, username, swap_size_gb
 # Arguments:
 #   None
 # Outputs:
@@ -1047,14 +1021,14 @@ display_summary() {
   echo "============================================"
   echo "  Kubuntu Installation Summary"
   echo "============================================"
-  echo "  Target Disk:    ${DISK}"
-  echo "  Hostname:       ${HOSTNAME_TARGET}"
-  echo "  Username:       ${USERNAME}"
-  echo "  Swap Size:      ${SWAP_SIZE_GB} GB"
+  echo "  Target Disk:    ${disk}"
+  echo "  Hostname:       ${hostname_target}"
+  echo "  Username:       ${username}"
+  echo "  Swap Size:      ${swap_size_gb} GB"
   echo "  ZFS Pool:       ${POOL_NAME}"
   echo "============================================"
   echo ""
-  warn "WARNING: ALL DATA ON ${DISK} WILL BE DESTROYED!"
+  warn "WARNING: ALL DATA ON ${disk} WILL BE DESTROYED!"
   echo ""
 }
 
@@ -1075,6 +1049,36 @@ main() {
   echo "╚════════════════════════════════════════════════════════════╝"
   echo ""
 
+  #######################################
+  # Global variables (set during runtime)
+  #######################################
+  disk=""
+  hostname_target=""
+  username=""
+  swap_size_gb="${DEFAULT_SWAP_SIZE_GB}"
+  interactive=true
+
+  # Partition variables (populated after partitioning)
+  part_efi=""
+  part_boot=""
+  part_swap=""
+  part_data=""
+  uuid_swap=""
+  uuid_data=""
+
+  if [[ -t 1 ]]; then
+    readonly red='\033[0;31m'
+    readonly green='\033[0;32m'
+    readonly yellow='\033[0;33m'
+    readonly blue='\033[0;34m'
+    readonly nc='\033[0m'
+  else
+    readonly red=''
+    readonly green=''
+    readonly yellow=''
+    readonly blue=''
+    readonly nc=''
+  fi
   parse_args "$@"
 
   check_root || exit 1
@@ -1090,7 +1094,7 @@ main() {
     exit 0
   fi
 
-  # Set up trap for cleanup on error
+  # Set up a trap for cleanup on error
   trap cleanup EXIT
 
   install_live_packages
@@ -1115,7 +1119,7 @@ main() {
   echo "║  Remove the installation media and reboot your system.     ║"
   echo "║                                                            ║"
   echo "║  Post-boot steps:                                          ║"
-  echo "║  1. Log in as: ${USERNAME}                                 ║"
+  echo "║  1. Log in as: ${username}                                 ║"
   echo "║  2. Set local time: timedatectl set-local-rtc 1            ║"
   echo "║  3. Test hibernation: systemctl hibernate                  ║"
   echo "╚════════════════════════════════════════════════════════════╝"
