@@ -748,6 +748,9 @@ systemctl enable zfs-import.target
 systemctl enable zfs-mount.service
 systemctl enable zfs.target
 
+info "Disabling KDE welcome screen..."
+rm -f /etc/xdg/autostart/org.kde.plasma-welcome.desktop
+
 success "Chroot installation has completed."
 CHROOT_SCRIPT
 
