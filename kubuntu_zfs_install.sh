@@ -614,7 +614,7 @@ echo "[INFO] Registering EFI boot entry..."
 # Use disk1 partition 1 (first member of EFI mirror)
 efibootmgr --create --disk @@DISK1@@ --part 1 \
   --label "Kubuntu" --loader "\\EFI\\kubuntu\\shimx64.efi" 2>/dev/null || \
-  echo "[WARN] Could not register EFI boot entry - may need after reboot"
+  echo "[WARN] Could not register EFI boot entry - may need attention after reboot"
 
 echo "[INFO] Removing snapd..."
 # Unmount all snap mounts first
@@ -669,7 +669,7 @@ apt-get -qq install -y brave-browser
 
 echo "[INFO] Checking for NVIDIA GPU..."
 if lspci -n | grep -q '10de:'; then
-  echo "[INFO] NVIDIA GPU detected - installing drivers..."
+  echo "[INFO] NVIDIA GPU detected—installing drivers..."
   ubuntu-drivers install
 else
   echo "[INFO] No NVIDIA GPU detected"
