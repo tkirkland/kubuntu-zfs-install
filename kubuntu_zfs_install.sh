@@ -65,7 +65,7 @@ preflight_checks() {
     info "Found squashfs: $squashfs_path"
 
     # Check network connectivity
-    if ! ping -c 1 -W 3 archive.ubuntu.com &> /dev/null; then
+    if ! ping -c 1 -W 3 8.8.8.8 &> /dev/null; then
         fatal "No network connectivity. Please connect to the internet first."
   fi
 
@@ -116,7 +116,7 @@ preflight_checks() {
 install_live_packages() {
     info "Installing required packages in live environment..."
     apt-get update -qq
-    apt-get install -y gdisk mdadm zfsutils-linux squashfs-tools
+    apt-get install -qq -y gdisk mdadm zfsutils-linux squashfs-tools
     success "Live environment packages installed."
 }
 
@@ -492,10 +492,13 @@ dpkg-divert --local --rename --divert /usr/sbin/update-grub.real --add /usr/sbin
 ln -sf /bin/true /usr/sbin/update-grub
 
 echo "[INFO] Installing/updating ZFS packages..."
-DEBIAN_FRONTEND=noninteractive apt-get install -y \
+DEBIAN_FRONTEND=noninteractive apt-get -qq install -y \
     zfs-initramfs \
     zfsutils-linux \
     zfs-zed
+
+mkdir -p /etc/zfs/initramfs-tools-load-key.d 2>/dev/null || true
+touch /etc/zfs/vdev_id.conf /etc/zfs/initramfs-tools-load-key 2>/dev/null || true
 
 echo "[INFO] Installing mdadm..."
 DEBIAN_FRONTEND=noninteractive apt-get -qq install -y mdadm
