@@ -521,10 +521,6 @@ mdadm --detail --scan >> /etc/mdadm/mdadm.conf
 # Reconfigure mdadm to ensure arrays are in initramfs
 dpkg-reconfigure -f noninteractive mdadm
 
-# Verify mdadm configuration
-echo "[DEBUG] mdadm.conf contents:"
-cat /etc/mdadm/mdadm.conf
-
 # Ensure udev rules are updated for mdadm
 udevadm control --reload-rules || true
 udevadm trigger || true
