@@ -130,7 +130,8 @@ select_disks() {
   done
 
     # Ensure all disks are different
-    if [[ $disk1 == "$disk2"   ]] || [[ $disk1 == "$disk3"   ]] || [[ $disk2 == "$disk3"   ]]; then
+    if [[ $disk1 == "$disk2"   ]] || [[ $disk1 == "$disk3"   ]] \
+      || [[ $disk2 == "$disk3"   ]]; then
         fatal "All three disks must be different."
   fi
 
@@ -471,21 +472,23 @@ update-locale LANG=en_US.UTF-8 LANGUAGE=en_US
 ln -sf /usr/share/zoneinfo/UTC /etc/localtime
 dpkg-reconfigure -f noninteractive tzdata
 
+# Set hardware clock to local time (timedatectl doesn't work in chroot)
+cat > /etc/adjtime <<ADJTIME
+0.0 0 0.0
+0
+LOCAL
+ADJTIME
+
 echo "[INFO] Regenerating machine-id..."
 systemd-machine-id-setup
 
 echo "[INFO] Updating package lists..."
-apt-get update
+apt-get -qq update
 
-# Temporarily disable grub hooks during package installation
-# We'll run update-grub once at the end after everything is configured
-echo "[INFO] Disabling grub hooks during package installation..."
-if [ -x /etc/kernel/postinst.d/zz-update-grub ]; then
-    chmod -x /etc/kernel/postinst.d/zz-update-grub
-    GRUB_HOOK_DISABLED=1
-fi
-# Also create a diversion for update-grub to prevent any calls
-dpkg-divert --local --rename --add /usr/sbin/update-grub
+echo "[INFO] Deferring update-grub during package installation..."
+# Divert update-grub to prevent ANY invocation during package installs
+# This catches direct postinst calls, triggers, and hook scripts
+dpkg-divert --local --rename --divert /usr/sbin/update-grub.real --add /usr/sbin/update-grub
 ln -sf /bin/true /usr/sbin/update-grub
 
 echo "[INFO] Installing/updating ZFS packages..."
@@ -495,7 +498,7 @@ DEBIAN_FRONTEND=noninteractive apt-get install -y \
     zfs-zed
 
 echo "[INFO] Installing mdadm..."
-DEBIAN_FRONTEND=noninteractive apt-get install -y mdadm
+DEBIAN_FRONTEND=noninteractive apt-get -qq install -y mdadm
 
 echo "[INFO] Configuring mdadm..."
 # Ensure mdadm.conf directory exists
@@ -515,8 +518,8 @@ MDADM_CONF
 # Append the actual array definitions
 mdadm --detail --scan >> /etc/mdadm/mdadm.conf
 
-# Reconfigure mdadm to ensure arrays are in initramfs (skip grub update)
-GRUB_DISABLE_UPDATE=true dpkg-reconfigure -f noninteractive mdadm
+# Reconfigure mdadm to ensure arrays are in initramfs
+dpkg-reconfigure -f noninteractive mdadm
 
 # Verify mdadm configuration
 echo "[DEBUG] mdadm.conf contents:"
@@ -532,8 +535,8 @@ mdadm --detail --scan
 ls -la /dev/md/ || echo "[WARN] /dev/md/ directory not found"
 
 echo "[INFO] Installing GRUB..."
-# Install grub packages without triggering update-grub
-DEBIAN_FRONTEND=noninteractive apt-get install -y \
+# Install grub packages - update-grub calls are diverted to /bin/true
+DEBIAN_FRONTEND=noninteractive apt-get -qq install -y \
     -o Dpkg::Options::="--force-confdef" \
     -o Dpkg::Options::="--force-confold" \
     grub-efi-amd64 \
@@ -560,22 +563,25 @@ UUID=${EFI_UUID}   /boot/efi   vfat   defaults,noatime,nofail,x-systemd.device-t
 UUID=${SWAP_UUID}  none        swap   sw,nofail,x-systemd.device-timeout=10s   0   0
 FSTAB
 
-echo "[DEBUG] fstab contents:"
-cat /etc/fstab
-
 echo "[INFO] Setting ZFS cachefile..."
 mkdir -p /etc/zfs
 zpool set cachefile=/etc/zfs/zpool.cache "$POOLNAME"
 
 echo "[INFO] Configuring GRUB for ZFS root..."
-# Remove quiet and splash for verbose boot, add ZFS root
-sed -i 's/GRUB_CMDLINE_LINUX_DEFAULT=".*"/GRUB_CMDLINE_LINUX_DEFAULT=""/' /etc/default/grub
+# Set quiet splash and enable OS prober for dual-boot
+sed -i 's/GRUB_CMDLINE_LINUX_DEFAULT=".*"/GRUB_CMDLINE_LINUX_DEFAULT="quiet splash"/' /etc/default/grub
 
 cat >> /etc/default/grub <<GRUBCFG
 
-# ZFS root filesystem—verbose boot (no quiet/splash)
+# ZFS root filesystem
 GRUB_CMDLINE_LINUX="root=ZFS=$POOLNAME/ROOT/kubuntu"
-GRUB_CMDLINE_LINUX_DEFAULT=""
+GRUB_CMDLINE_LINUX_DEFAULT="quiet splash"
+
+# Enable OS prober to detect other operating systems
+GRUB_DISABLE_OS_PROBER=false
+
+# Screen resolution (16:9)
+GRUB_GFXMODE=1600x900
 GRUBCFG
 
 echo "[INFO] Ensuring mdadm is included in initramfs..."
@@ -589,13 +595,9 @@ MDADM_INITRAMFS
 echo "[INFO] Updating initramfs..."
 update-initramfs -c -k all
 
-# Restore update-grub now that everything is configured
-echo "[INFO] Re-enabling update-grub..."
+echo "[INFO] Restoring update-grub..."
 rm -f /usr/sbin/update-grub
-dpkg-divert --local --rename --remove /usr/sbin/update-grub
-if [ "${GRUB_HOOK_DISABLED:-0}" = "1" ]; then
-    chmod +x /etc/kernel/postinst.d/zz-update-grub 2>/dev/null || true
-fi
+dpkg-divert --remove /usr/sbin/update-grub
 
 echo "[INFO] Installing GRUB to EFI..."
 # Use --no-nvram since we're in a chroot and can't write EFI variables
@@ -617,20 +619,27 @@ umount /snap/core*/* 2>/dev/null || true
 umount /snap/snapd/* 2>/dev/null || true
 umount /snap/* 2>/dev/null || true
 umount /var/lib/snapd/snap/* 2>/dev/null || true
-# Remove all snap files before purging to avoid unit stop retries
+
+# Remove all snap files before purging
 rm -rf /var/lib/snapd /var/snap /var/cache/snapd /snap /root/snap 2>/dev/null || true
-# Remove snapd without running any of its scripts
-dpkg --purge --force-all snapd 2>/dev/null || true
+
+# Neuter maintainer scripts to avoid systemd calls in chroot
+for script in /var/lib/dpkg/info/snapd.{prerm,postrm}; do
+    [[ -f "$script" ]] && echo "exit 0" > "$script"
+done
+
+# Now purge cleanly
+dpkg --purge snapd 2>/dev/null || true
 apt-get purge -qq -y --auto-remove snapd 2>/dev/null || true
+
 # Block future installation
 cat > /etc/apt/preferences.d/no-snapd <<SNAPD
 Package: snapd
 Pin: release *
 Pin-Priority: -1
 SNAPD
-
 # Fix any broken dependencies from snapd removal
-apt-get --fix-broken install -y
+#apt-get --fix-broken install -y
 
 echo "[INFO] Removing live session packages..."
 apt-get purge -qq -y \
@@ -641,11 +650,14 @@ apt-get purge -qq -y \
     calamares \
     kubuntu-installer-prompt \
     2>/dev/null || true
+
+echo "[INFO] Removing LibreOffice..."
+apt-get purge -qq -y 'libreoffice*' 2>/dev/null || true
 apt-get autoremove -qq -y
 
 echo "[INFO] Checking for NVIDIA GPU..."
 if lspci -n | grep -q '10de:'; then
-    echo "[INFO] NVIDIA GPU detected - installing drivers..."
+    echo "[INFO] NVIDIA GPU detected—installing drivers..."
     ubuntu-drivers install
 else
     echo "[INFO] No NVIDIA GPU detected"
@@ -676,6 +688,19 @@ cat > /etc/sudoers.d/nopasswd-apps <<SUDOERS
 %sudo ALL=(ALL) NOPASSWD: /usr/sbin/zstreamdump
 SUDOERS
 chmod 440 /etc/sudoers.d/nopasswd-apps
+
+echo "[INFO] Configuring Polkit for packagekit/flatpak..."
+mkdir -p /etc/polkit-1/rules.d
+cat > /etc/polkit-1/rules.d/50-nopasswd-packagekit.rules <<POLKIT
+// Allow user to install/update packages without password
+polkit.addRule(function(action, subject) {
+    if ((action.id.indexOf("org.freedesktop.packagekit.") === 0 ||
+         action.id.indexOf("org.freedesktop.Flatpak.") === 0) &&
+        subject.user === "$USERNAME") {
+        return polkit.Result.YES;
+    }
+});
+POLKIT
 
 echo "[INFO] Enabling ZFS services..."
 systemctl enable zfs-import-cache.service

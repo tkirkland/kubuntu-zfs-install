@@ -57,3 +57,6 @@ credentials/
 *.iso
 *.img
 .serena/
+
+# Claude
+CLAUDE.md
