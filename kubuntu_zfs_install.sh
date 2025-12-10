@@ -748,7 +748,7 @@ systemctl enable zfs-import.target
 systemctl enable zfs-mount.service
 systemctl enable zfs.target
 
-success "Chroot installation complete."
+success "Chroot installation has completed."
 CHROOT_SCRIPT
 
   # Substitute variables in the chroot script
