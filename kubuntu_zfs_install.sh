@@ -638,8 +638,6 @@ Package: snapd
 Pin: release *
 Pin-Priority: -1
 SNAPD
-# Fix any broken dependencies from snapd removal
-#apt-get --fix-broken install -y
 
 echo "[INFO] Removing live session packages..."
 apt-get purge -qq -y \
