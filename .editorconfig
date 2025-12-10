@@ -16,12 +16,6 @@ indent_style = space
 indent_size = 2
 max_line_length = 80
 
-# Bash files without extension
-[kubuntu-zfs-install]
-indent_style = space
-indent_size = 2
-max_line_length = 80
-
 # Markdown files
 [*.md]
 indent_style = space
