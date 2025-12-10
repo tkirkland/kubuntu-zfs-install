@@ -462,11 +462,23 @@ chroot_install() {
 #!/bin/bash
 set -euo pipefail
 
+# Color output helpers
+readonly RED='\033[0;31m'
+readonly GREEN='\033[0;32m'
+readonly YELLOW='\033[1;33m'
+readonly BLUE='\033[0;34m'
+readonly NC='\033[0m'
+
+info()    { echo -e "${BLUE}[INFO]${NC} $*"; }
+success() { echo -e "${GREEN}[OK]${NC} $*"; }
+warn()    { echo -e "${YELLOW}[WARN]${NC} $*"; }
+error()   { echo -e "${RED}[ERROR]${NC} $*" >&2; }
+
 export DEBIAN_FRONTEND=noninteractive
 export POOLNAME="@@POOLNAME@@"
 export USERNAME="@@USERNAME@@"
 
-echo "[INFO] Configuring locale and timezone..."
+info "Configuring locale and timezone..."
 locale-gen --purge "en_US.UTF-8"
 update-locale LANG=en_US.UTF-8 LANGUAGE=en_US
 
@@ -480,10 +492,10 @@ done
 
 # Validate detected timezone exists, fallback to America/New_York
 if [[ -n "$DETECTED_TZ" ]] && [[ -f "/usr/share/zoneinfo/$DETECTED_TZ" ]]; then
-  echo "[INFO] Detected timezone: $DETECTED_TZ"
+  info "Detected timezone: $DETECTED_TZ"
   ln -sf "/usr/share/zoneinfo/$DETECTED_TZ" /etc/localtime
 else
-  echo "[WARN] Could not detect timezone, using America/New_York"
+  warn "Could not detect timezone, using America/New_York"
   ln -sf /usr/share/zoneinfo/America/New_York /etc/localtime
 fi
 dpkg-reconfigure -f noninteractive tzdata
@@ -495,13 +507,13 @@ cat > /etc/adjtime <<ADJTIME
 LOCAL
 ADJTIME
 
-echo "[INFO] Regenerating machine-id..."
+info "Regenerating machine-id..."
 systemd-machine-id-setup
 
-echo "[INFO] Updating package lists..."
+info "Updating package lists..."
 apt-get -qq update
 
-echo "[INFO] Deferring update-grub during package installation..."
+info "Deferring update-grub during package installation..."
 # Divert update-grub to prevent ANY invocation during package installs
 # This catches direct postinst calls, triggers, and hook scripts
 dpkg-divert --local --rename \
@@ -509,7 +521,7 @@ dpkg-divert --local --rename \
   --add /usr/sbin/update-grub
 ln -sf /bin/true /usr/sbin/update-grub
 
-echo "[INFO] Installing/updating ZFS packages..."
+info "Installing/updating ZFS packages..."
 DEBIAN_FRONTEND=noninteractive apt-get -qq install -y \
   zfs-initramfs \
   zfsutils-linux \
@@ -518,10 +530,10 @@ DEBIAN_FRONTEND=noninteractive apt-get -qq install -y \
 mkdir -p /etc/zfs/initramfs-tools-load-key.d 2>/dev/null || true
 touch /etc/zfs/vdev_id.conf /etc/zfs/initramfs-tools-load-key 2>/dev/null || true
 
-echo "[INFO] Installing mdadm..."
+info "Installing mdadm..."
 DEBIAN_FRONTEND=noninteractive apt-get -qq install -y mdadm
 
-echo "[INFO] Configuring mdadm..."
+info "Configuring mdadm..."
 # Ensure mdadm.conf directory exists
 mkdir -p /etc/mdadm
 
@@ -547,11 +559,11 @@ udevadm control --reload-rules || true
 udevadm trigger || true
 
 # Verify arrays are assembled and symlinks exist
-echo "[DEBUG] mdadm array status:"
+info "mdadm array status:"
 mdadm --detail --scan
-ls -la /dev/md/ || echo "[WARN] /dev/md/ directory not found"
+ls -la /dev/md/ || warn "/dev/md/ directory not found"
 
-echo "[INFO] Installing GRUB..."
+info "Installing GRUB..."
 # Install grub packages - update-grub calls are diverted to /bin/true
 DEBIAN_FRONTEND=noninteractive apt-get -qq install -y \
   -o Dpkg::Options::="--force-confdef" \
@@ -560,7 +572,7 @@ DEBIAN_FRONTEND=noninteractive apt-get -qq install -y \
   grub-efi-amd64-signed \
   shim-signed
 
-echo "[INFO] Configuring fstab..."
+info "Configuring fstab..."
 # Get UUIDs for reliable boot - mdadm symlinks may not exist at early boot
 BOOT_UUID=$(blkid -s UUID -o value /dev/md/boot)
 EFI_UUID=$(blkid -s UUID -o value /dev/md/efi)
@@ -580,11 +592,11 @@ UUID=${EFI_UUID}   /boot/efi  vfat  defaults,noatime,nofail,umask=0077  0  1
 UUID=${SWAP_UUID}  none       swap  sw,nofail  0  0
 FSTAB
 
-echo "[INFO] Setting ZFS cachefile..."
+info "Setting ZFS cachefile..."
 mkdir -p /etc/zfs
 zpool set cachefile=/etc/zfs/zpool.cache "$POOLNAME"
 
-echo "[INFO] Configuring GRUB for ZFS root..."
+info "Configuring GRUB for ZFS root..."
 # Set quiet splash and enable OS prober for dual-boot
 sed -i 's/GRUB_CMDLINE_LINUX_DEFAULT=".*"/GRUB_CMDLINE_LINUX_DEFAULT="quiet splash"/' \
   /etc/default/grub
@@ -602,7 +614,7 @@ GRUB_DISABLE_OS_PROBER=false
 GRUB_GFXMODE=1600x900
 GRUBCFG
 
-echo "[INFO] Ensuring mdadm is included in initramfs..."
+info "Ensuring mdadm is included in initramfs..."
 # Make sure initramfs include mdadm modules
 cat > /etc/initramfs-tools/conf.d/mdadm <<MDADM_INITRAMFS
 # Include mdadm in initramfs for boot partition assembly
@@ -610,29 +622,29 @@ BOOT_DEGRADED=true
 MDADM_INITRAMFS
 
 # Update initramfs with mdadm and ZFS support
-echo "[INFO] Updating initramfs..."
+info "Updating initramfs..."
 update-initramfs -c -k all
 
-echo "[INFO] Restoring update-grub..."
+info "Restoring update-grub..."
 rm -f /usr/sbin/update-grub
 dpkg-divert --rename --remove /usr/sbin/update-grub
 
-echo "[INFO] Installing GRUB to EFI..."
+info "Installing GRUB to EFI..."
 # Use --no-nvram since we're in a chroot and can't write EFI variables
 grub-install --target=x86_64-efi --efi-directory=/boot/efi \
   --bootloader-id=kubuntu --recheck --no-nvram
 
-echo "[INFO] Updating GRUB configuration..."
+info "Updating GRUB configuration..."
 update-grub
 
-echo "[INFO] Registering EFI boot entry..."
+info "Registering EFI boot entry..."
 # Create EFI boot entry using actual disk (not md device)
 # Use disk1 partition 1 (first member of EFI mirror)
 efibootmgr --create --disk @@DISK1@@ --part 1 \
   --label "Kubuntu" --loader "\\EFI\\kubuntu\\shimx64.efi" 2>/dev/null || \
-  echo "[WARN] Could not register EFI boot entry - may need attention after reboot"
+  warn "Could not register EFI boot entry - may need attention after reboot"
 
-echo "[INFO] Removing snapd..."
+info "Removing snapd..."
 # Unmount all snap mounts first
 umount /snap/bare/* 2>/dev/null || true
 umount /snap/core*/* 2>/dev/null || true
@@ -660,7 +672,7 @@ Pin: release *
 Pin-Priority: -1
 SNAPD
 
-echo "[INFO] Removing live session packages..."
+info "Removing live session packages..."
 apt-get purge -qq -y \
   'live-*' \
   calamares-settings-kubuntu \
@@ -670,11 +682,11 @@ apt-get purge -qq -y \
   kubuntu-installer-prompt \
   2>/dev/null || true
 
-echo "[INFO] Removing LibreOffice..."
+info "Removing LibreOffice..."
 apt-get purge -qq -y 'libreoffice*' 2>/dev/null || true
 apt-get autoremove -qq -y
 
-echo "[INFO] Installing Brave browser..."
+info "Installing Brave browser..."
 curl -fsSL https://brave-browser-apt-release.s3.brave.com/brave-browser-archive-keyring.gpg \
   -o /usr/share/keyrings/brave-browser-archive-keyring.gpg
 echo "deb [signed-by=/usr/share/keyrings/brave-browser-archive-keyring.gpg] \
@@ -683,20 +695,20 @@ https://brave-browser-apt-release.s3.brave.com/ stable main" \
 apt-get -qq update
 apt-get -qq install -y brave-browser
 
-echo "[INFO] Checking for NVIDIA GPU..."
+info "Checking for NVIDIA GPU..."
 if lspci -n | grep -q '10de:'; then
-  echo "[INFO] NVIDIA GPU detected—installing drivers..."
+  info "NVIDIA GPU detected—installing drivers..."
   ubuntu-drivers install
 else
-  echo "[INFO] No NVIDIA GPU detected"
+  info "No NVIDIA GPU detected"
 fi
 
-echo "[INFO] Creating user '$USERNAME'..."
+info "Creating user '$USERNAME'..."
 useradd -m -s /bin/bash -G adm,cdrom,sudo,dip,plugdev,lpadmin "$USERNAME"
-echo "[INFO] Set password for $USERNAME:"
+info "Set password for $USERNAME:"
 passwd "$USERNAME"
 
-echo "[INFO] Configuring sudoers for common tasks..."
+info "Configuring sudoers for common tasks..."
 cat > /etc/sudoers.d/nopasswd-apps <<SUDOERS
 # Allow users in sudo group to run package management without password
 %sudo ALL=(ALL) NOPASSWD: /usr/bin/apt
@@ -717,7 +729,7 @@ cat > /etc/sudoers.d/nopasswd-apps <<SUDOERS
 SUDOERS
 chmod 440 /etc/sudoers.d/nopasswd-apps
 
-echo "[INFO] Configuring Polkit for packagekit/flatpak..."
+info "Configuring Polkit for packagekit/flatpak..."
 mkdir -p /etc/polkit-1/rules.d
 cat > /etc/polkit-1/rules.d/50-nopasswd-packagekit.rules <<POLKIT
 // Allow user to install/update packages without password
@@ -730,13 +742,13 @@ polkit.addRule(function(action, subject) {
 });
 POLKIT
 
-echo "[INFO] Enabling ZFS services..."
+info "Enabling ZFS services..."
 systemctl enable zfs-import-cache.service
 systemctl enable zfs-import.target
 systemctl enable zfs-mount.service
 systemctl enable zfs.target
 
-echo "[INFO] Chroot installation complete."
+success "Chroot installation complete."
 CHROOT_SCRIPT
 
   # Substitute variables in the chroot script
