@@ -652,6 +652,14 @@ echo "[INFO] Removing LibreOffice..."
 apt-get purge -qq -y 'libreoffice*' 2>/dev/null || true
 apt-get autoremove -qq -y
 
+echo "[INFO] Installing Brave browser..."
+curl -fsSL https://brave-browser-apt-release.s3.brave.com/brave-browser-archive-keyring.gpg \
+    -o /usr/share/keyrings/brave-browser-archive-keyring.gpg
+echo "deb [signed-by=/usr/share/keyrings/brave-browser-archive-keyring.gpg] https://brave-browser-apt-release.s3.brave.com/ stable main" \
+    > /etc/apt/sources.list.d/brave-browser-release.list
+apt-get -qq update
+apt-get -qq install -y brave-browser
+
 echo "[INFO] Checking for NVIDIA GPU..."
 if lspci -n | grep -q '10de:'; then
     echo "[INFO] NVIDIA GPU detected—installing drivers..."
