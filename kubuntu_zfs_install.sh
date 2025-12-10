@@ -597,7 +597,7 @@ update-initramfs -c -k all
 
 echo "[INFO] Restoring update-grub..."
 rm -f /usr/sbin/update-grub
-dpkg-divert --remove /usr/sbin/update-grub
+dpkg-divert --rename --remove /usr/sbin/update-grub
 
 echo "[INFO] Installing GRUB to EFI..."
 # Use --no-nvram since we're in a chroot and can't write EFI variables
