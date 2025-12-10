@@ -469,7 +469,23 @@ export USERNAME="@@USERNAME@@"
 echo "[INFO] Configuring locale and timezone..."
 locale-gen --purge "en_US.UTF-8"
 update-locale LANG=en_US.UTF-8 LANGUAGE=en_US
-ln -sf /usr/share/zoneinfo/UTC /etc/localtime
+
+# Detect timezone via geo-IP (ipinfo.io is reliable and free for light use)
+DETECTED_TZ=""
+for geo_service in \
+    "ipinfo.io/timezone" \
+    "ip-api.com/line/?fields=timezone"; do
+  DETECTED_TZ=$(curl -fsSL --connect-timeout 5 "https://$geo_service" 2>/dev/null) && break
+done
+
+# Validate detected timezone exists, fallback to America/New_York
+if [[ -n "$DETECTED_TZ" ]] && [[ -f "/usr/share/zoneinfo/$DETECTED_TZ" ]]; then
+  echo "[INFO] Detected timezone: $DETECTED_TZ"
+  ln -sf "/usr/share/zoneinfo/$DETECTED_TZ" /etc/localtime
+else
+  echo "[WARN] Could not detect timezone, using America/New_York"
+  ln -sf /usr/share/zoneinfo/America/New_York /etc/localtime
+fi
 dpkg-reconfigure -f noninteractive tzdata
 
 # Set hardware clock to local time (timedatectl doesn't work in chroot)
