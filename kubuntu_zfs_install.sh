@@ -1,11 +1,10 @@
 #!/bin/bash
 #bashsupport disable=GrazieInspection
 #
-# Kubuntu 24.10 Installation Script with ZFS and LUKS Encryption
+# Kubuntu 24.10 Installation Script with ZFS (No Encryption)
 #
 # This script automates the installation of Kubuntu with:
-#   - ZFS root filesystem
-#   - LUKS2 encryption for data and swap
+#   - ZFS root filesystem (direct, no encryption)
 #   - EFI boot support
 #   - KDE Plasma desktop
 #   - Hibernation support
@@ -19,8 +18,6 @@
 # Requirements:
 #   - Boot from Kubuntu live USB
 #   - Run as root (sudo -i)
-#   - Internet connection
-#
 
 set -o errexit
 set -o nounset
@@ -32,11 +29,23 @@ set -o pipefail
 readonly SCRIPT_NAME="${0##*/}"
 readonly SCRIPT_VERSION="1.0.0"
 
-# Default configuration values
-readonly DEFAULT_SWAP_SIZE_GB=64
+# Disks - use /dev/disk/by-id/ paths for stability
+readonly DISK1="/dev/disk/by-id/nvme-eui.0025384331408197"
+readonly DISK2="/dev/disk/by-id/nvme-eui.002538433140818a"
+readonly DISK3="/dev/disk/by-id/nvme-eui.002538433140819d"
+
+# System configuration
+readonly DEFAULT_HOST="precision"
+readonly DEFAULT_USERNAME="me"
+readonly DEFAULT_USERID="1000"
+
+# Partition sizes
+readonly EFI_SIZE="512M"
+readonly BOOT_SIZE="1792M"
+readonly SWAP_SIZE="4G"
+
+# ZFS configuration
 readonly DEFAULT_SYSTEM_QUOTA_GB=100
-readonly EFI_SIZE_MB=255
-readonly BOOT_SIZE_MB=1792
 
 # ZFS dataset names
 readonly POOL_NAME="System"
@@ -47,6 +56,10 @@ readonly DATASET_VBOX="${POOL_NAME}/VirtualBox"
 
 # Mount points
 readonly INSTALL_POINT="/mnt/install"
+
+# Locale fallback (used if auto-detection fails)
+readonly FALLBACK_LOCALE="en_US.UTF-8"
+readonly FALLBACK_TIMEZONE="America/New_York"
 
 # Color codes for output (empty if not terminal)
 
@@ -117,21 +130,25 @@ usage() {
   cat <<EOF
 Usage: ${SCRIPT_NAME} [OPTIONS]
 
-Kubuntu 24.10 Installation with ZFS and LUKS Encryption
+Kubuntu 24.10 Installation with ZFS RAIDZ (No Encryption)
+
+This script installs Kubuntu on a 3-disk RAIDZ1 configuration using:
+  - ${DISK1}
+  - ${DISK2}
+  - ${DISK3}
 
 Options:
-  -d, --disk DISK       Target disk device (e.g., /dev/nvme0n1)
-  -h, --hostname NAME   System hostname
-  -u, --user USERNAME   Primary user account name
-  -s, --swap SIZE       Swap size in GB (default: ${DEFAULT_SWAP_SIZE_GB})
+  -h, --hostname NAME   System hostname (default: ${DEFAULT_HOST})
+  -u, --user USERNAME   Primary user account name (default: ${DEFAULT_USERNAME})
   -y, --yes             Non-interactive mode (skip confirmations)
   --help                Show this help message
 
 Examples:
-  ${SCRIPT_NAME} --disk /dev/nvme0n1 --hostname mypc --user johndoe
-  ${SCRIPT_NAME} -d /dev/sda -h workstation -u admin -s 32
+  ${SCRIPT_NAME}
+  ${SCRIPT_NAME} --hostname mypc --user johndoe
+  ${SCRIPT_NAME} -y
 
-WARNING: This script will DESTROY all data on the target disk!
+WARNING: This script will DESTROY all data on ALL THREE target disks!
 EOF
   exit 0
 }
@@ -166,29 +183,6 @@ check_live_environment() {
   if [[ ! -d /cdrom ]] && [[ ! -d /run/live ]]; then
     warn "Not detected as live environment. Proceeding anyway..."
   fi
-  return 0
-}
-
-#######################################
-# Validate disk device exists.
-# Globals:
-#   disk
-# Arguments:
-#   None
-# Returns:
-#   0 if valid, 1 otherwise
-#######################################
-validate_disk() {
-  if [[ -z "${disk}" ]]; then
-    err "No disk specified. Use --disk option."
-    return 1
-  fi
-
-  if [[ ! -b "${disk}" ]]; then
-    err "Disk '${disk}' is not a valid block device"
-    return 1
-  fi
-
   return 0
 }
 
@@ -232,175 +226,189 @@ install_live_packages() {
   step "Installing required packages in live environment"
 
   apt-get update
-  apt-get install -y gdisk zfsutils-linux debootstrap
+  apt-get install -y gdisk zfsutils-linux
 }
 
 #######################################
-# Calculate the last aligned sector for 4K drives.
+# Find the Kubuntu squashfs filesystem image.
 # Globals:
-#   disk
-# Arguments:
-#   None
-# Outputs:
-#   Writes last aligned sector to stdout
-#######################################
-get_last_aligned_sector() {
-  local total_sectors
-  local sector_size
-  local alignment
-
-  total_sectors=$(blockdev --getsz "${disk}")
-  sector_size=$(blockdev --getss "${disk}")
-  alignment=$((4096 / sector_size))
-
-  echo $(( (total_sectors / alignment) * alignment - 1 ))
-}
-
-#######################################
-# Partition the target disk.
-# Globals:
-#   disk, EFI_SIZE_MB, BOOT_SIZE_MB, swap_size_gb
-#   part_efi, part_boot, part_swap, part_data
+#   squashfs_path
 # Arguments:
 #   None
 # Returns:
-#   0 on success
+#   0 if found, 1 otherwise
 #######################################
-partition_disk() {
-  step "Partitioning disk: ${disk}"
+find_squashfs() {
+  step "Locating squashfs filesystem image"
 
-  local last_sector
-  last_sector=$(get_last_aligned_sector)
+  # Common locations for squashfs on Ubuntu/Kubuntu live systems
+  local search_paths=(
+    "/cdrom/casper/filesystem.squashfs"
+    "/run/live/medium/casper/filesystem.squashfs"
+    "/media/cdrom/casper/filesystem.squashfs"
+    "/lib/live/mount/medium/casper/filesystem.squashfs"
+  )
 
-  # Determine partition naming scheme (nvme vs standard)
-  local part_prefix="${disk}"
-  if [[ "${disk}" == *"nvme"* ]] || [[ "${disk}" == *"mmcblk"* ]]; then
-    part_prefix="${disk}p"
+  for path in "${search_paths[@]}"; do
+    if [[ -f "${path}" ]]; then
+      squashfs_path="${path}"
+      info "Found squashfs at: ${squashfs_path}"
+      return 0
+    fi
+  done
+
+  # Try to find it with find command as fallback
+  local found_path
+  found_path=$(find /cdrom /run/live /media /lib/live \
+    -name "filesystem.squashfs" -type f 2>/dev/null | head -n 1)
+
+  if [[ -n "${found_path}" ]]; then
+    squashfs_path="${found_path}"
+    info "Found squashfs at: ${squashfs_path}"
+    return 0
   fi
 
-  part_efi="${part_prefix}1"
-  part_boot="${part_prefix}2"
-  part_swap="${part_prefix}3"
-  part_data="${part_prefix}4"
+  err "Could not find filesystem.squashfs"
+  err "Searched in: ${search_paths[*]}"
+  return 1
+}
 
-  info "Wiping existing partition table..."
+#######################################
+# Get partition path for a disk.
+# Arguments:
+#   $1 - disk path
+#   $2 - partition number
+# Outputs:
+#   Writes partition path to stdout
+#######################################
+get_partition_path() {
+  local disk="$1"
+  local partnum="$2"
+
+  # Determine partition naming scheme (nvme/mmcblk vs standard)
+  if [[ "${disk}" == *"nvme"* ]] || [[ "${disk}" == *"mmcblk"* ]]; then
+    echo "${disk}-part${partnum}"
+  else
+    echo "${disk}-part${partnum}"
+  fi
+}
+
+#######################################
+# Partition a single disk for RAIDZ setup.
+# Arguments:
+#   $1 - disk path
+#   $2 - disk number (1, 2, or 3)
+# Returns:
+#   0 on success
+#######################################
+partition_single_disk() {
+  local disk="$1"
+  local disk_num="$2"
+
+  info "Partitioning disk ${disk_num}: ${disk}"
+
+  # Wipe existing partition table
   blkdiscard -f "${disk}" 2>/dev/null || wipefs -a "${disk}"
   sgdisk --zap-all "${disk}"
 
-  info "Creating partitions..."
+  if [[ "${disk_num}" -eq 1 ]]; then
+    # First disk: EFI + Boot + Swap + Data
+    sgdisk --new=1:0:+"${EFI_SIZE}" \
+           --typecode=1:EF00 \
+           --change-name=1:"EFI" \
+           "${disk}"
 
-  # EFI System Partition (ESP)
-  sgdisk --new=1:0:+"${EFI_SIZE_MB}"M \
-         --typecode=1:EF00 \
-         --change-name=1:"EFI" \
-         "${disk}"
+    sgdisk --new=2:0:+"${BOOT_SIZE}" \
+           --typecode=2:8300 \
+           --change-name=2:"Boot" \
+           "${disk}"
 
-  # Boot partition
-  sgdisk --new=2:0:+"${BOOT_SIZE_MB}"M \
-         --typecode=2:8300 \
-         --change-name=2:"Boot" \
-         "${disk}"
+    sgdisk --new=3:0:+"${SWAP_SIZE}" \
+           --typecode=3:8200 \
+           --change-name=3:"Swap" \
+           "${disk}"
 
-  # Swap partition (LUKS encrypted)
-  sgdisk --new=3:0:+"${swap_size_gb}"G \
-         --typecode=3:8200 \
-         --change-name=3:"Swap" \
-         "${disk}"
-
-  # Data partition (LUKS encrypted, remaining space)
-  sgdisk --new=4:0:"${last_sector}" \
-         --typecode=4:8309 \
-         --change-name=4:"Data" \
-         "${disk}"
+    sgdisk --new=4:0:0 \
+           --typecode=4:BF00 \
+           --change-name=4:"Data" \
+           "${disk}"
+  else
+    # Other disks: Only Data partition (full disk)
+    sgdisk --new=1:0:0 \
+           --typecode=1:BF00 \
+           --change-name=1:"Data" \
+           "${disk}"
+  fi
 
   # Inform the kernel of partition changes
   partprobe "${disk}"
+}
+
+#######################################
+# Partition all target disks for RAIDZ.
+# Globals:
+#   DISK1, DISK2, DISK3, EFI_SIZE, BOOT_SIZE, SWAP_SIZE
+#   part_efi, part_boot, part_swap
+#   part_data1, part_data2, part_data3
+# Arguments:
+#   None
+# Returns:
+#   0 on success
+#######################################
+partition_disks() {
+  step "Partitioning all disks for RAIDZ1"
+
+  # Partition each disk
+  partition_single_disk "${DISK1}" 1
+  partition_single_disk "${DISK2}" 2
+  partition_single_disk "${DISK3}" 3
+
+  # Wait for partitions to appear
   sleep 2
 
+  # Set partition paths for DISK1 (boot disk)
+  part_efi=$(get_partition_path "${DISK1}" 1)
+  part_boot=$(get_partition_path "${DISK1}" 2)
+  part_swap=$(get_partition_path "${DISK1}" 3)
+
+  # Set data partition paths for all disks
+  part_data1=$(get_partition_path "${DISK1}" 4)
+  part_data2=$(get_partition_path "${DISK2}" 1)
+  part_data3=$(get_partition_path "${DISK3}" 1)
+
   info "Partitions created:"
-  info "  EFI:  ${part_efi}"
-  info "  Boot: ${part_boot}"
-  info "  Swap: ${part_swap}"
-  info "  Data: ${part_data}"
+  info "  DISK1 (boot disk):"
+  info "    EFI:  ${part_efi}"
+  info "    Boot: ${part_boot}"
+  info "    Swap: ${part_swap}"
+  info "    Data: ${part_data1}"
+  info "  DISK2:"
+  info "    Data: ${part_data2}"
+  info "  DISK3:"
+  info "    Data: ${part_data3}"
 }
 
+
 #######################################
-# Retrieve partition UUIDs.
+# Create ZFS RAIDZ1 pool and datasets.
 # Globals:
-#   part_swap, part_data, uuid_swap, uuid_data
-# Arguments:
-#   None
-# Returns:
-#   0 on success
-#######################################
-get_partition_uuids() {
-  uuid_swap=$(blkid -s UUID -o value "${part_swap}")
-  uuid_data=$(blkid -s UUID -o value "${part_data}")
-
-  info "Partition UUIDs:"
-  info "  Swap: ${uuid_swap}"
-  info "  Data: ${uuid_data}"
-}
-
-#######################################
-# Setup LUKS encryption on partitions.
-# Globals:
-#   part_swap, part_data, uuid_swap, uuid_data
-# Arguments:
-#   None
-# Returns:
-#   0 on success
-#######################################
-setup_luks_encryption() {
-  step "Setting up LUKS encryption"
-
-  local luks_options=(
-    --type luks2
-    --cipher aes-xts-plain64
-    --key-size 256
-    --hash sha256
-    --pbkdf argon2i
-    --iter-time 3000
-    --verify-passphrase
-  )
-
-  info "Encrypting swap partition..."
-  info "You will be prompted to enter and verify a passphrase."
-  cryptsetup luksFormat "${luks_options[@]}" "${part_swap}"
-
-  info "Encrypting data partition..."
-  info "You will be prompted to enter and verify a passphrase."
-  cryptsetup luksFormat "${luks_options[@]}" "${part_data}"
-
-  # Retrieve UUIDs after LUKS formatting
-  get_partition_uuids
-
-  info "Opening encrypted partitions..."
-  cryptsetup luksOpen "${part_swap}" "luks-${uuid_swap}"
-  cryptsetup luksOpen "${part_data}" "luks-${uuid_data}"
-
-  # Set persistence flags
-  cryptsetup --persistent --allow-discards \
-    --perf-no_read_workqueue --perf-no_write_workqueue \
-    refresh "luks-${uuid_data}"
-}
-
-#######################################
-# Create ZFS pool and datasets.
-# Globals:
-#   uuid_data, POOL_NAME, DATASET_ROOT, DATASET_HOME
-#   DATASET_DATA, DATASET_VBOX, DEFAULT_SYSTEM_QUOTA_GB
+#   part_data1, part_data2, part_data3, POOL_NAME
+#   DATASET_ROOT, DATASET_HOME, DATASET_DATA, DATASET_VBOX
+#   DEFAULT_SYSTEM_QUOTA_GB
 # Arguments:
 #   None
 # Returns:
 #   0 on success
 #######################################
 create_zfs_pool() {
-  step "Creating ZFS pool and datasets"
+  step "Creating ZFS RAIDZ1 pool and datasets"
 
-  local pool_device="/dev/mapper/luks-${uuid_data}"
+  info "Creating ZFS pool: ${POOL_NAME} (RAIDZ1)"
+  info "  Using devices:"
+  info "    - ${part_data1}"
+  info "    - ${part_data2}"
+  info "    - ${part_data3}"
 
-  info "Creating ZFS pool: ${POOL_NAME}"
   zpool create -f \
     -o ashift=12 \
     -o autotrim=on \
@@ -412,7 +420,7 @@ create_zfs_pool() {
     -O xattr=sa \
     -O canmount=off \
     -O mountpoint=none \
-    "${POOL_NAME}" "${pool_device}"
+    "${POOL_NAME}" raidz1 "${part_data1}" "${part_data2}" "${part_data3}"
 
   info "Creating root dataset: ${DATASET_ROOT}"
   zfs create \
@@ -453,7 +461,7 @@ create_zfs_pool() {
 #######################################
 # Format and mount boot partitions.
 # Globals:
-#   part_efi, part_boot, part_swap, uuid_swap, INSTALL_POINT
+#   part_efi, part_boot, part_swap, INSTALL_POINT
 # Arguments:
 #   None
 # Returns:
@@ -476,26 +484,50 @@ setup_boot_partitions() {
   mount "${part_efi}" "${INSTALL_POINT}/boot/efi"
 
   info "Initializing swap..."
-  mkswap "/dev/mapper/luks-${uuid_swap}"
+  mkswap "${part_swap}"
 }
 
 #######################################
-# Bootstrap the base system.
+# Copy the base system from squashfs.
 # Globals:
-#   INSTALL_POINT
+#   INSTALL_POINT, squashfs_path
 # Arguments:
 #   None
 # Returns:
 #   0 on success
 #######################################
-bootstrap_system() {
-  step "Bootstrapping Kubuntu base system"
+copy_system_from_squashfs() {
+  step "Copying system from squashfs image"
 
-  local release="oracular"  # Kubuntu 24.10
+  local squashfs_mount="/mnt/squashfs"
 
-  info "Running debootstrap (this may take a while)..."
-  debootstrap --arch=amd64 "${release}" "${INSTALL_POINT}" \
-    http://archive.ubuntu.com/ubuntu
+  info "Mounting squashfs image..."
+  mkdir -p "${squashfs_mount}"
+  mount -t squashfs -o ro "${squashfs_path}" "${squashfs_mount}"
+
+  info "Copying filesystem (this may take a while)..."
+  rsync -aHAXx --info=progress2 \
+    --exclude='/boot/efi/*' \
+    --exclude='/tmp/*' \
+    --exclude='/var/tmp/*' \
+    --exclude='/var/cache/apt/archives/*.deb' \
+    --exclude='/var/log/*' \
+    --exclude='/swapfile' \
+    "${squashfs_mount}/" "${INSTALL_POINT}/"
+
+  info "Unmounting squashfs..."
+  umount "${squashfs_mount}"
+  rmdir "${squashfs_mount}"
+
+  # Create the necessary directories
+  mkdir -p "${INSTALL_POINT}/boot/efi"
+  mkdir -p "${INSTALL_POINT}/tmp"
+  mkdir -p "${INSTALL_POINT}/var/tmp"
+  mkdir -p "${INSTALL_POINT}/var/log"
+  chmod 1777 "${INSTALL_POINT}/tmp"
+  chmod 1777 "${INSTALL_POINT}/var/tmp"
+
+  info "System copy complete."
 }
 
 #######################################
@@ -575,8 +607,7 @@ mount_chroot_dirs() {
 #######################################
 # Generate the chroot configuration script.
 # Globals:
-#   hostname_target, username, uuid_swap, uuid_data
-#   part_efi, part_boot
+#   hostname_target, username, part_efi, part_boot, part_swap
 # Arguments:
 #   None
 # Outputs:
@@ -600,10 +631,12 @@ set -o pipefail
 # Variables passed from the parent script
 HOSTNAME_TARGET="__HOSTNAME__"
 USERNAME="__USERNAME__"
-UUID_SWAP="__UUID_SWAP__"
-UUID_DATA="__UUID_DATA__"
+USERID="__USERID__"
 PART_EFI="__PART_EFI__"
 PART_BOOT="__PART_BOOT__"
+PART_SWAP="__PART_SWAP__"
+FALLBACK_LOCALE="__FALLBACK_LOCALE__"
+FALLBACK_TIMEZONE="__FALLBACK_TIMEZONE__"
 
 info() {
   echo "[INFO] $*"
@@ -620,24 +653,16 @@ step() {
 configure_locale() {
   step "Configuring locale and timezone"
 
-  # Set locale
-  locale-gen en_US.UTF-8
-  update-locale LANG=en_US.UTF-8
+  # Set locale using fallback
+  locale-gen "${FALLBACK_LOCALE}"
+  update-locale LANG="${FALLBACK_LOCALE}"
 
-  # Configure timezone interactively
-  dpkg-reconfigure tzdata
-}
+  # Set timezone using fallback
+  ln -sf "/usr/share/zoneinfo/${FALLBACK_TIMEZONE}" /etc/localtime
+  echo "${FALLBACK_TIMEZONE}" > /etc/timezone
 
-#######################################
-# Create crypttab entries
-#######################################
-create_crypttab() {
-  step "Creating /etc/crypttab"
-
-  cat > /etc/crypttab <<EOF
-luks-${UUID_SWAP} UUID=${UUID_SWAP} none luks,discard,keyscript=decrypt_keyctl
-luks-${UUID_DATA} UUID=${UUID_DATA} none luks,discard,keyscript=decrypt_keyctl
-EOF
+  info "Locale set to: ${FALLBACK_LOCALE}"
+  info "Timezone set to: ${FALLBACK_TIMEZONE}"
 }
 
 #######################################
@@ -648,9 +673,11 @@ create_fstab() {
 
   local efi_uuid
   local boot_uuid
+  local swap_uuid
 
   efi_uuid=$(blkid -s UUID -o value "${PART_EFI}")
   boot_uuid=$(blkid -s UUID -o value "${PART_BOOT}")
+  swap_uuid=$(blkid -s UUID -o value "${PART_SWAP}")
 
   cat > /etc/fstab <<EOF
 # <file system>                           <mount point>  <type>  <options>                    <dump> <pass>
@@ -658,39 +685,21 @@ create_fstab() {
 UUID=${boot_uuid}                         /boot          ext4    defaults,nofail              0      2
 # EFI System Partition
 UUID=${efi_uuid}                          /boot/efi      vfat    umask=0077,nofail            0      1
-# Swap (encrypted)
-/dev/mapper/luks-${UUID_SWAP}             none           swap    sw,discard                   0      0
+# Swap
+UUID=${swap_uuid}                         none           swap    sw,discard                   0      0
 EOF
 }
 
 #######################################
-# Install kernel and boot components
+# Install ZFS boot support
 #######################################
-install_kernel() {
-  step "Installing kernel and boot components"
-
-  # Add universe repository
-  cat > /etc/apt/sources.list.d/ubuntu.sources <<EOF
-Types: deb
-URIs: https://archive.ubuntu.com/ubuntu
-Suites: oracular oracular-updates oracular-security
-Components: main restricted universe multiverse
-Signed-By: /usr/share/keyrings/ubuntu-archive-keyring.gpg
-EOF
+install_zfs_boot() {
+  step "Installing ZFS boot support"
 
   apt-get update
 
-  # Install kernel
-  apt-get install -y linux-generic linux-headers-generic
-
-  # Install ZFS and encryption support
-  apt-get install -y zfsutils-linux zfs-initramfs cryptsetup keyutils
-
-  # Install GRUB
-  apt-get install -y grub-efi-amd64-signed shim-signed
-
-  # Install Plymouth for boot splash
-  apt-get install -y plymouth plymouth-theme-spinner
+  # Install zfs-initramfs for ZFS root boot support
+  apt-get install -y zfs-initramfs
 }
 
 #######################################
@@ -715,8 +724,8 @@ EOF
 configure_grub() {
   step "Configuring GRUB"
 
-  local swap_mapper_uuid
-  swap_mapper_uuid=$(blkid -s UUID -o value "/dev/mapper/luks-${UUID_SWAP}")
+  local swap_uuid
+  swap_uuid=$(blkid -s UUID -o value "${PART_SWAP}")
 
   # Update GRUB configuration
   cat > /etc/default/grub <<EOF
@@ -724,7 +733,7 @@ GRUB_DEFAULT=0
 GRUB_TIMEOUT=5
 GRUB_DISTRIBUTOR="Kubuntu"
 GRUB_CMDLINE_LINUX_DEFAULT="quiet splash"
-GRUB_CMDLINE_LINUX="root=ZFS=System/Root resume=UUID=${swap_mapper_uuid}"
+GRUB_CMDLINE_LINUX="root=ZFS=System/Root resume=UUID=${swap_uuid}"
 GRUB_TERMINAL=console
 EOF
 
@@ -759,32 +768,10 @@ EOF
 }
 
 #######################################
-# Install KDE Plasma desktop
-#######################################
-install_desktop() {
-  step "Installing KDE Plasma desktop"
-
-  DEBIAN_FRONTEND=noninteractive apt-get install -y \
-    kde-plasma-desktop \
-    plasma-nm \
-    sddm \
-    konsole \
-    dolphin \
-    kate \
-    man-db \
-    wget \
-    curl \
-    vim \
-    network-manager
-}
-
-#######################################
 # Configure hibernation support
 #######################################
 configure_hibernation() {
   step "Configuring hibernation support"
-
-  apt-get install -y pm-utils
 
   # Enable hibernation
   mkdir -p /etc/systemd/sleep.conf.d
@@ -807,32 +794,13 @@ EOF
 }
 
 #######################################
-# Install Firefox from Mozilla PPA
-#######################################
-install_firefox() {
-  step "Installing Firefox"
-
-  add-apt-repository -y ppa:mozillateam/ppa
-
-  # Prioritize PPA version
-  cat > /etc/apt/preferences.d/mozilla-ppa.pref <<EOF
-Package: firefox*
-Pin: release o=LP-PPA-mozillateam
-Pin-Priority: 1001
-EOF
-
-  apt-get update
-  apt-get install -y firefox
-}
-
-#######################################
 # Create user account
 #######################################
 create_user() {
-  step "Creating user account: ${USERNAME}"
+  step "Creating user account: ${USERNAME} (UID: ${USERID})"
 
-  # Create a user with a disabled password initially
-  useradd -m -s /bin/bash -G adm,cdrom,sudo,dip,plugdev "${USERNAME}"
+  # Create user with specific UID
+  useradd -m -s /bin/bash -u "${USERID}" -G adm,cdrom,sudo,dip,plugdev "${USERNAME}"
 
   # Configure passwordless sudo for initial setup
   echo "${USERNAME} ALL=(ALL) NOPASSWD:ALL" > "/etc/sudoers.d/${USERNAME}"
@@ -850,15 +818,12 @@ create_user() {
 #######################################
 main() {
   configure_locale
-  create_crypttab
   create_fstab
-  install_kernel
+  install_zfs_boot
   configure_kernel
   configure_grub
   configure_packages
-  install_desktop
   configure_hibernation
-  install_firefox
   create_user
 
   info "Chroot configurations complete!"
@@ -870,10 +835,12 @@ CHROOT_SCRIPT
   # Replace placeholders with actual values
   sed -i "s|__HOSTNAME__|${hostname_target}|g" "${script_path}"
   sed -i "s|__USERNAME__|${username}|g" "${script_path}"
-  sed -i "s|__UUID_SWAP__|${uuid_swap}|g" "${script_path}"
-  sed -i "s|__UUID_DATA__|${uuid_data}|g" "${script_path}"
+  sed -i "s|__USERID__|${DEFAULT_USERID}|g" "${script_path}"
   sed -i "s|__PART_EFI__|${part_efi}|g" "${script_path}"
   sed -i "s|__PART_BOOT__|${part_boot}|g" "${script_path}"
+  sed -i "s|__PART_SWAP__|${part_swap}|g" "${script_path}"
+  sed -i "s|__FALLBACK_LOCALE__|${FALLBACK_LOCALE}|g" "${script_path}"
+  sed -i "s|__FALLBACK_TIMEZONE__|${FALLBACK_TIMEZONE}|g" "${script_path}"
 
   chmod +x "${script_path}"
   echo "${script_path}"
@@ -902,7 +869,7 @@ run_chroot_setup() {
 #######################################
 # Cleanup and unmount filesystems.
 # Globals:
-#   INSTALL_POINT, POOL_NAME, uuid_swap, uuid_data
+#   INSTALL_POINT, POOL_NAME
 # Arguments:
 #   None
 # Returns:
@@ -931,17 +898,13 @@ cleanup() {
   # Export ZFS pool
   zpool export -a 2>/dev/null || true
 
-  # Close LUKS devices
-  cryptsetup luksClose "luks-${uuid_swap}" 2>/dev/null || true
-  cryptsetup luksClose "luks-${uuid_data}" 2>/dev/null || true
-
   info "Cleanup complete."
 }
 
 #######################################
 # Parse command line arguments.
 # Globals:
-#   disk, hostname_target, username, swap_size_gb, interactive
+#   hostname_target, username, interactive
 # Arguments:
 #   Command line arguments
 # Returns:
@@ -950,20 +913,12 @@ cleanup() {
 parse_args() {
   while [[ $# -gt 0 ]]; do
     case "$1" in
-      -d|--disk)
-        disk="$2"
-        shift 2
-        ;;
       -h|--hostname)
         hostname_target="$2"
         shift 2
         ;;
       -u|--user)
         username="$2"
-        shift 2
-        ;;
-      -s|--swap)
-        swap_size_gb="$2"
         shift 2
         ;;
       -y|--yes)
@@ -982,35 +937,60 @@ parse_args() {
 }
 
 #######################################
-# Prompt for missing required values.
+# Set default values for unset variables.
 # Globals:
-#   disk, hostname_target, username, interactive
+#   hostname_target, username
 # Arguments:
 #   None
 # Returns:
 #   0 on success
 #######################################
-prompt_missing_values() {
-  if [[ -z "${disk}" ]]; then
-    info "Available disks:"
-    lsblk -d -o NAME,SIZE,MODEL | grep -v "^loop"
-    echo ""
-    read -r -p "Enter target disk (e.g., /dev/nvme0n1): " disk
-  fi
-
+set_defaults() {
+  # Use defaults if not set via command line
   if [[ -z "${hostname_target}" ]]; then
-    read -r -p "Enter system hostname: " hostname_target
+    hostname_target="${DEFAULT_HOST}"
   fi
 
   if [[ -z "${username}" ]]; then
-    read -r -p "Enter primary username: " username
+    username="${DEFAULT_USERNAME}"
   fi
+}
+
+#######################################
+# Validate that all required disks exist.
+# Globals:
+#   DISK1, DISK2, DISK3
+# Arguments:
+#   None
+# Returns:
+#   0 if all disks exist, 1 otherwise
+#######################################
+validate_disks() {
+  step "Validating target disks"
+
+  local missing=0
+
+  for disk in "${DISK1}" "${DISK2}" "${DISK3}"; do
+    if [[ -b "${disk}" ]]; then
+      info "Found: ${disk}"
+    else
+      err "Missing: ${disk}"
+      missing=1
+    fi
+  done
+
+  if [[ ${missing} -eq 1 ]]; then
+    err "One or more target disks not found"
+    return 1
+  fi
+
+  return 0
 }
 
 #######################################
 # Display installation summary.
 # Globals:
-#   disk, hostname_target, username, swap_size_gb
+#   hostname_target, username, DISK1, DISK2, DISK3
 # Arguments:
 #   None
 # Outputs:
@@ -1019,16 +999,26 @@ prompt_missing_values() {
 display_summary() {
   echo ""
   echo "============================================"
-  echo "  Kubuntu Installation Summary"
+  echo "  Kubuntu RAIDZ Installation Summary"
   echo "============================================"
-  echo "  Target Disk:    ${disk}"
   echo "  Hostname:       ${hostname_target}"
   echo "  Username:       ${username}"
-  echo "  Swap Size:      ${swap_size_gb} GB"
-  echo "  ZFS Pool:       ${POOL_NAME}"
+  echo "  User ID:        ${DEFAULT_USERID}"
+  echo ""
+  echo "  Target Disks (RAIDZ1):"
+  echo "    - ${DISK1}"
+  echo "    - ${DISK2}"
+  echo "    - ${DISK3}"
+  echo ""
+  echo "  Partition Sizes:"
+  echo "    - EFI:  ${EFI_SIZE}"
+  echo "    - Boot: ${BOOT_SIZE}"
+  echo "    - Swap: ${SWAP_SIZE}"
+  echo ""
+  echo "  ZFS Pool:       ${POOL_NAME} (RAIDZ1)"
   echo "============================================"
   echo ""
-  warn "WARNING: ALL DATA ON ${disk} WILL BE DESTROYED!"
+  warn "WARNING: ALL DATA ON ALL THREE DISKS WILL BE DESTROYED!"
   echo ""
 }
 
@@ -1044,7 +1034,7 @@ display_summary() {
 main() {
   echo ""
   echo "╔════════════════════════════════════════════════════════════╗"
-  echo "║  Kubuntu 24.10 Installation with ZFS and LUKS Encryption   ║"
+  echo "║  Kubuntu 24.10 Installation with ZFS RAIDZ (No Encryption) ║"
   echo "║  Version: ${SCRIPT_VERSION}                                         ║"
   echo "╚════════════════════════════════════════════════════════════╝"
   echo ""
@@ -1052,19 +1042,20 @@ main() {
   #######################################
   # Global variables (set during runtime)
   #######################################
-  disk=""
   hostname_target=""
   username=""
-  swap_size_gb="${DEFAULT_SWAP_SIZE_GB}"
   interactive=true
 
   # Partition variables (populated after partitioning)
   part_efi=""
   part_boot=""
   part_swap=""
-  part_data=""
-  uuid_swap=""
-  uuid_data=""
+  part_data1=""
+  part_data2=""
+  part_data3=""
+
+  # Squashfs path (populated by find_squashfs)
+  squashfs_path=""
 
   if [[ -t 1 ]]; then
     readonly red='\033[0;31m'
@@ -1084,8 +1075,8 @@ main() {
   check_root || exit 1
   check_live_environment
 
-  prompt_missing_values
-  validate_disk || exit 1
+  set_defaults
+  validate_disks || exit 1
 
   display_summary
 
@@ -1094,15 +1085,17 @@ main() {
     exit 0
   fi
 
+  # Find squashfs before proceeding
+  find_squashfs || exit 1
+
   # Set up a trap for cleanup on error
   trap cleanup EXIT
 
   install_live_packages
-  partition_disk
-  setup_luks_encryption
+  partition_disks
   create_zfs_pool
   setup_boot_partitions
-  bootstrap_system
+  copy_system_from_squashfs
   configure_hostname
   setup_network
   mount_chroot_dirs

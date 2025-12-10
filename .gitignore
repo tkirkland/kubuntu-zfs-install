@@ -56,3 +56,4 @@ credentials/
 # Installation artifacts
 *.iso
 *.img
+.serena/
