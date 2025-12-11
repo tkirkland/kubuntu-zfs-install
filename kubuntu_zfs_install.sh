@@ -1,5 +1,4 @@
 #!/bin/bash
-#
 # Kubuntu 25.10 (Questing Quokka) ZFS RAIDZ1 Installation Script
 #
 # This script installs Kubuntu 25.10 on a 3-disk RAIDZ1 configuration with:
@@ -443,10 +442,11 @@ EOF
 #------------------------------------------------------------------------------
 # Chroot setup and installation
 #------------------------------------------------------------------------------
+# bashsupport disable=GrazieInspection
 chroot_install() {
   info "Setting up chroot environment..."
 
-  # Mount virtual filesystems with rslave for clean unmount
+  # Mount virtual filesystems with rslave allowing a clean unmounting
   mount --rbind /dev  "$install_root/dev"
   mount --make-rslave "$install_root/dev"
   mount --rbind /proc "$install_root/proc"
@@ -529,6 +529,7 @@ DEBIAN_FRONTEND=noninteractive apt-get -qq install -y \
 
 mkdir -p /etc/zfs/initramfs-tools-load-key.d 2>/dev/null || true
 touch /etc/zfs/vdev_id.conf /etc/zfs/initramfs-tools-load-key 2>/dev/null || true
+touch /etc/zfs/initramfs-tools-load-key.d/.keep 2>/dev/null || true
 
 info "Installing mdadm..."
 DEBIAN_FRONTEND=noninteractive apt-get -qq install -y mdadm
@@ -664,6 +665,8 @@ done
 # Now purge cleanly
 dpkg --purge snapd 2>/dev/null || true
 apt-get purge -qq -y --auto-remove snapd 2>/dev/null || true
+rm /etc/systemd/system/snap-*.mount
+rm -rf /etc/systemd/system/snapd.mounts.target.wants
 
 # Block future installation
 cat > /etc/apt/preferences.d/no-snapd <<SNAPD
@@ -683,8 +686,8 @@ apt-get purge -qq -y \
   2>/dev/null || true
 
 info "Removing LibreOffice..."
-apt-get purge -qq -y 'libreoffice*' 2>/dev/null || true
-apt-get autoremove -qq -y
+apt-get purge -qq -y 'libreoffice*' >/dev/null 2>&1 || true
+apt-get autoremove -qq -y >/dev/null 2>&1
 
 info "Installing Brave browser..."
 curl -fsSL https://brave-browser-apt-release.s3.brave.com/brave-browser-archive-keyring.gpg \
@@ -692,13 +695,13 @@ curl -fsSL https://brave-browser-apt-release.s3.brave.com/brave-browser-archive-
 echo "deb [signed-by=/usr/share/keyrings/brave-browser-archive-keyring.gpg] \
 https://brave-browser-apt-release.s3.brave.com/ stable main" \
   > /etc/apt/sources.list.d/brave-browser-release.list
-apt-get -qq update
-apt-get -qq install -y brave-browser
+apt-get -qq update >/dev/null 2>&1
+apt-get -qq install -y brave-browser >/dev/null 2>&1
 
 info "Checking for NVIDIA GPU..."
 if lspci -n | grep -q '10de:'; then
   info "NVIDIA GPU detected—installing drivers..."
-  ubuntu-drivers install
+  ubuntu-drivers install --recommended >/dev/null 2>&1
 else
   info "No NVIDIA GPU detected"
 fi
@@ -748,9 +751,13 @@ systemctl enable -q zfs-import-cache.service zfs-import.target zfs-mount.service
 info "Disabling KDE welcome screen..."
 apt-get remove -qq -y plasma-welcome
 
+info "Performing full system upgrade..."
+apt-get -qq update >/dev/null 2>&1
+apt-get -qq full-upgrade -y >/dev/null 2>&1
+
 info "Configuring Secure Boot MOK enrollment..."
-# Generate MOK key if it doesn't exist (shim-signed creates it on first DKMS build,
-# but we need it now for enrollment)
+# Generate MOK key if it doesn't exist (shim-signed creates it on first DKMS
+# build, but we need it now for enrollment)
 if [[ ! -f /var/lib/shim-signed/mok/MOK.der ]]; then
   info "Generating MOK signing key..."
   mkdir -p /var/lib/shim-signed/mok
@@ -793,18 +800,18 @@ final_cleanup() {
   # Unmount in the correct order - most nested first, no lazy unmounts
   # First unmount nested virtual filesystems
   umount "$install_root/proc/sys/fs/binfmt_misc" 2>/dev/null || true
-  umount "$install_root/dev/pts" 2>/dev/null || true
-  umount "$install_root/dev/shm" 2>/dev/null || true
-  umount "$install_root/dev/hugepages" 2>/dev/null || true
-  umount "$install_root/dev/mqueue" 2>/dev/null || true
-  umount "$install_root/sys/kernel/security" 2>/dev/null || true
-  umount "$install_root/sys/fs/cgroup" 2>/dev/null || true
+  umount "$install_root/dev/pts" 2>/dev/null                 || true
+  umount "$install_root/dev/shm" 2>/dev/null                 || true
+  umount "$install_root/dev/hugepages" 2>/dev/null           || true
+  umount "$install_root/dev/mqueue" 2>/dev/null              || true
+  umount "$install_root/sys/kernel/security" 2>/dev/null     || true
+  umount "$install_root/sys/fs/cgroup" 2>/dev/null           || true
 
   # Then unmount main virtual filesystems
-  umount "$install_root/dev" 2>/dev/null || true
+  umount "$install_root/dev" 2>/dev/null  || true
   umount "$install_root/proc" 2>/dev/null || true
-  umount "$install_root/sys" 2>/dev/null || true
-  umount "$install_root/run" 2>/dev/null || true
+  umount "$install_root/sys" 2>/dev/null  || true
+  umount "$install_root/run" 2>/dev/null  || true
 
   # Unmount EFI and Boot
   umount "$install_root/boot/efi" 2>/dev/null || true
