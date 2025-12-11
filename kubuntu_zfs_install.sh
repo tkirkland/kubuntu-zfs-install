@@ -751,6 +751,25 @@ systemctl enable zfs.target
 info "Disabling KDE welcome screen..."
 rm -f /etc/xdg/autostart/org.kde.plasma-welcome.desktop
 
+info "Configuring Secure Boot MOK enrollment..."
+# Generate MOK key if it doesn't exist (shim-signed creates it on first DKMS build,
+# but we need it now for enrollment)
+if [[ ! -f /var/lib/shim-signed/mok/MOK.der ]]; then
+  info "Generating MOK signing key..."
+  mkdir -p /var/lib/shim-signed/mok
+  openssl req -new -x509 -newkey rsa:2048 -keyout /var/lib/shim-signed/mok/MOK.priv \
+    -outform DER -out /var/lib/shim-signed/mok/MOK.der -nodes -days 36500 \
+    -subj "/CN=Machine Owner Key/" -addext "extendedKeyUsage=codeSigning"
+  chmod 600 /var/lib/shim-signed/mok/MOK.priv
+fi
+
+# Import MOK key for Secure Boot enrollment
+# This prompts for a password now; on first reboot with Secure Boot enabled,
+# the user completes enrollment in the MOK manager using that password
+# DKMS will then use this key to sign ZFS and NVIDIA modules automatically
+mokutil --import /var/lib/shim-signed/mok/MOK.der
+success "MOK key queued for enrollment (complete at next reboot)"
+
 success "Chroot installation has completed."
 CHROOT_SCRIPT
 
