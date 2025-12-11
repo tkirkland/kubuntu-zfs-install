@@ -498,7 +498,7 @@ else
   warn "Could not detect timezone, using America/New_York"
   ln -sf /usr/share/zoneinfo/America/New_York /etc/localtime
 fi
-dpkg-reconfigure -f noninteractive tzdata
+dpkg-reconfigure -f noninteractive tzdata > /dev/null
 
 # Set hardware clock to local time (timedatectl doesn't work in chroot)
 cat > /etc/adjtime <<ADJTIME
@@ -552,7 +552,7 @@ MDADM_CONF
 mdadm --detail --scan >> /etc/mdadm/mdadm.conf
 
 # Reconfigure mdadm to ensure arrays are in initramfs
-dpkg-reconfigure -f noninteractive mdadm
+dpkg-reconfigure -f noninteractive mdadm > /dev/null
 
 # Ensure udev rules are updated for mdadm
 udevadm control --reload-rules || true
@@ -743,13 +743,10 @@ polkit.addRule(function(action, subject) {
 POLKIT
 
 info "Enabling ZFS services..."
-systemctl enable zfs-import-cache.service
-systemctl enable zfs-import.target
-systemctl enable zfs-mount.service
-systemctl enable zfs.target
+systemctl enable -q zfs-import-cache.service zfs-import.target zfs-mount.service zfs.target
 
 info "Disabling KDE welcome screen..."
-rm -f /etc/xdg/autostart/org.kde.plasma-welcome.desktop
+apt-get remove -qq -y plasma-welcome
 
 info "Configuring Secure Boot MOK enrollment..."
 # Generate MOK key if it doesn't exist (shim-signed creates it on first DKMS build,
