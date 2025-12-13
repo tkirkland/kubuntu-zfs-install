@@ -68,6 +68,7 @@ username="your-username"
 - ZFS utilities and kernel modules
 - GRUB with ZFS support
 - NetworkManager
+- Brave browser
 - NVIDIA drivers (if hardware detected)
 - Secure Boot MOK key for module signing
 
