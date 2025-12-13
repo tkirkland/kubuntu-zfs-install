@@ -6,10 +6,9 @@ Automated installation script for Kubuntu 25.10 (Questing Quokka) on a 3-disk ZF
 
 - **ZFS Root**: RAIDZ1 pool across 3 NVMe drives with all features enabled
 - **Redundant Boot**: mdadm RAID1 mirrors for EFI and /boot partitions
-- **Fast Swap**: mdadm RAID0 stripe across all 3 disks
+- **Fast Swap**: mdadm RAID0 stripe across all 3 disks (12GB)
 - **Secure Boot**: Automatic MOK key generation for DKMS module signing
 - **Clean Install**: Removes snaps, LibreOffice, and other bloatware
-- **Hibernation Ready**: Swap configured with resume support
 
 ## Disk Layout
 
