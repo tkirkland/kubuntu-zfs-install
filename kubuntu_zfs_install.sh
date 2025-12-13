@@ -1,4 +1,5 @@
 #!/bin/bash
+# bashsupport disable=GrazieStyle
 # Kubuntu 25.10 (Questing Quokka) ZFS RAIDZ1 Installation Script
 #
 # This script installs Kubuntu 25.10 on a 3-disk RAIDZ1 configuration with:
@@ -655,6 +656,7 @@ umount /var/lib/snapd/snap/* 2>/dev/null || true
 
 # Remove all snap files before purging
 rm -rf /var/lib/snapd /var/snap /var/cache/snapd /snap /root/snap \
+  /etc/systemd/system/snap-*.mount /etc/systemd/system/snap*.service \
   2>/dev/null || true
 
 # Neuter maintainer scripts to avoid systemd calls in chroot
@@ -676,6 +678,7 @@ Pin-Priority: -1
 SNAPD
 
 info "Removing live session packages..."
+systemctl disable casper.service> /dev/null 2>&1 || true
 apt-get purge -qq -y \
   'live-*' \
   calamares-settings-kubuntu \
@@ -683,6 +686,7 @@ apt-get purge -qq -y \
   calamares-settings-ubuntu-common-data \
   calamares \
   kubuntu-installer-prompt \
+  casper*'
   2>/dev/null || true
 
 info "Removing LibreOffice..."
@@ -773,6 +777,10 @@ fi
 # DKMS will then use this key to sign ZFS and NVIDIA modules automatically
 mokutil --import /var/lib/shim-signed/mok/MOK.der
 success "MOK key queued for enrollment (complete at next reboot)"
+
+# For reasons unknown, it appears this release did not create the appropriate
+# dirs in /var/log/journal. Here we do that.
+journalctl --flush
 
 success "Chroot installation has completed."
 CHROOT_SCRIPT
