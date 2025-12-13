@@ -62,15 +62,11 @@ HOSTNAME="your-hostname"
 username="your-username"
 ```
 
-## What Gets Installed
+## What Gets Added
 
-- Base Kubuntu system extracted from squashfs
-- ZFS utilities and kernel modules
-- GRUB with ZFS support
-- NetworkManager
 - Brave browser
 - NVIDIA drivers (if hardware detected)
-- Secure Boot MOK key for module signing
+- Secure Boot MOK key for DKMS module signing
 
 ## What Gets Removed
 
