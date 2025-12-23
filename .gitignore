@@ -60,3 +60,6 @@ credentials/
 
 # Claude
 CLAUDE.md
+
+# Auto Claude data directory
+.auto-claude/
