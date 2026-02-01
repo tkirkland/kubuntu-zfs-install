@@ -71,7 +71,7 @@ preflight_checks() {
   fi
 
   # Check for required commands
-  for cmd in sgdisk mdadm unsquashfs chroot zpool zfs; do
+  for cmd in sgdisk mdadm unsquashfs chroot zpool zfs unshare; do
     command -v "$cmd" &>/dev/null || fatal "Required command '$cmd' not found."
   done
 
