@@ -445,15 +445,7 @@ EOF
 #------------------------------------------------------------------------------
 # bashsupport disable=GrazieInspection
 chroot_install() {
-  info "Setting up chroot environment..."
-
-  # Mount virtual filesystems with rslave allowing a clean unmounting
-  mount --rbind /dev  "$install_root/dev"
-  mount --make-rslave "$install_root/dev"
-  mount --rbind /proc "$install_root/proc"
-  mount --make-rslave "$install_root/proc"
-  mount --rbind /sys  "$install_root/sys"
-  mount --make-rslave "$install_root/sys"
+  info "Setting up chroot environment with namespace isolation..."
 
   # Copy resolv.conf for network access in chroot
   cp /etc/resolv.conf "$install_root/etc/resolv.conf"
@@ -791,10 +783,27 @@ CHROOT_SCRIPT
   sed -i "s|@@DISK1@@|$disk1|g" "$install_root/tmp/chroot-install.sh"
 
   chmod +x "$install_root/tmp/chroot-install.sh"
-  chroot "$install_root" /tmp/chroot-install.sh
+
+  # Create namespace wrapper script that bind-mounts inside a private namespace
+  cat > "$install_root/tmp/ns-wrapper.sh" << NSWRAPPER
+#!/bin/bash
+set -euo pipefail
+# Bind-mount virtual filesystems inside the mount namespace
+mount --rbind /dev  "$install_root/dev"
+mount --rbind /sys  "$install_root/sys"
+mount -t proc proc  "$install_root/proc"
+# Enter chroot and run the install script
+chroot "$install_root" /tmp/chroot-install.sh
+NSWRAPPER
+  chmod +x "$install_root/tmp/ns-wrapper.sh"
+
+  # Run inside isolated mount+pid namespace — all mounts vanish on exit
+  unshare --mount --fork --pid --kill-child -- \
+    "$install_root/tmp/ns-wrapper.sh"
 
   # Clean up
-  rm -f "$install_root/tmp/chroot-install.sh"
+  rm -f "$install_root/tmp/chroot-install.sh" \
+        "$install_root/tmp/ns-wrapper.sh"
 
   success "Chroot installation complete."
 }
