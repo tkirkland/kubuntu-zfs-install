@@ -20,14 +20,16 @@ error() { echo -e "${RED}[ERROR]${NC} $*" >&2; }
 poolname="${1:-System}"
 install_root="${2:-/mnt/install}"
 
+# NOTE: With namespace isolation (unshare --mount), bind mounts are automatically
+# cleaned up when the namespace exits. These unmounts are kept as a fallback for
+# cases where the chroot was set up without namespace isolation.
 info "Unmounting chroot bind mounts..."
 for mnt in "$install_root/dev" "$install_root/proc" "$install_root/sys"; do
   if mountpoint -q "$mnt" 2>/dev/null; then
     info "Unmounting $mnt (recursive)"
     umount -R "$mnt" || {
-      error "Failed to unmount $mnt"
+      warn "Failed to unmount $mnt (may already be gone due to namespace isolation)"
       fuser -vm "$mnt" 2>/dev/null || true
-      exit 1
     }
   fi
 done
