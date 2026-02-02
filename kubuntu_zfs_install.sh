@@ -71,7 +71,7 @@ preflight_checks() {
   fi
 
   # Check for required commands
-  for cmd in sgdisk mdadm unsquashfs chroot zpool zfs; do
+  for cmd in sgdisk mdadm unsquashfs chroot zpool zfs unshare; do
     command -v "$cmd" &>/dev/null || fatal "Required command '$cmd' not found."
   done
 
@@ -445,15 +445,7 @@ EOF
 #------------------------------------------------------------------------------
 # bashsupport disable=GrazieInspection
 chroot_install() {
-  info "Setting up chroot environment..."
-
-  # Mount virtual filesystems with rslave allowing a clean unmounting
-  mount --rbind /dev  "$install_root/dev"
-  mount --make-rslave "$install_root/dev"
-  mount --rbind /proc "$install_root/proc"
-  mount --make-rslave "$install_root/proc"
-  mount --rbind /sys  "$install_root/sys"
-  mount --make-rslave "$install_root/sys"
+  info "Setting up chroot environment with namespace isolation..."
 
   # Copy resolv.conf for network access in chroot
   cp /etc/resolv.conf "$install_root/etc/resolv.conf"
@@ -791,10 +783,27 @@ CHROOT_SCRIPT
   sed -i "s|@@DISK1@@|$disk1|g" "$install_root/tmp/chroot-install.sh"
 
   chmod +x "$install_root/tmp/chroot-install.sh"
-  chroot "$install_root" /tmp/chroot-install.sh
+
+  # Create namespace wrapper script that bind-mounts inside a private namespace
+  cat > "$install_root/tmp/ns-wrapper.sh" << NSWRAPPER
+#!/bin/bash
+set -euo pipefail
+# Bind-mount virtual filesystems inside the mount namespace
+mount --rbind /dev  "$install_root/dev"
+mount --rbind /sys  "$install_root/sys"
+mount -t proc proc  "$install_root/proc"
+# Enter chroot and run the install script
+chroot "$install_root" /tmp/chroot-install.sh
+NSWRAPPER
+  chmod +x "$install_root/tmp/ns-wrapper.sh"
+
+  # Run inside isolated mount+pid namespace — all mounts vanish on exit
+  unshare --mount --fork --pid --kill-child -- \
+    "$install_root/tmp/ns-wrapper.sh"
 
   # Clean up
-  rm -f "$install_root/tmp/chroot-install.sh"
+  rm -f "$install_root/tmp/chroot-install.sh" \
+        "$install_root/tmp/ns-wrapper.sh"
 
   success "Chroot installation complete."
 }
@@ -805,21 +814,14 @@ CHROOT_SCRIPT
 final_cleanup() {
   info "Final cleanup..."
 
-  # Unmount in the correct order - most nested first, no lazy unmounts
-  # First unmount nested virtual filesystems
-  umount "$install_root/proc/sys/fs/binfmt_misc" 2>/dev/null || true
-  umount "$install_root/dev/pts" 2>/dev/null                 || true
-  umount "$install_root/dev/shm" 2>/dev/null                 || true
-  umount "$install_root/dev/hugepages" 2>/dev/null           || true
-  umount "$install_root/dev/mqueue" 2>/dev/null              || true
-  umount "$install_root/sys/kernel/security" 2>/dev/null     || true
-  umount "$install_root/sys/fs/cgroup" 2>/dev/null           || true
-
-  # Then unmount main virtual filesystems
-  umount "$install_root/dev" 2>/dev/null  || true
-  umount "$install_root/proc" 2>/dev/null || true
-  umount "$install_root/sys" 2>/dev/null  || true
-  umount "$install_root/run" 2>/dev/null  || true
+  # Defensive teardown of dev/proc/sys in case namespace cleanup didn't fire
+  # (e.g., if unshare wasn't used). With namespace isolation these are auto-cleaned.
+  for mnt in "$install_root/dev" "$install_root/proc" "$install_root/sys"; do
+    if mountpoint -q "$mnt" 2>/dev/null; then
+      warn "Namespace cleanup missed $mnt — unmounting"
+      umount -R "$mnt" 2>/dev/null || true
+    fi
+  done
 
   # Unmount EFI and Boot
   umount "$install_root/boot/efi" 2>/dev/null || true
