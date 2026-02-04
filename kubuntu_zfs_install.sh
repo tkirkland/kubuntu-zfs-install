@@ -41,6 +41,28 @@ readonly disk3="/dev/disk/by-id/nvme-eui.002538433140819d"
 readonly install_root="/mnt/install"
 
 #------------------------------------------------------------------------------
+# Safety: prevent host-namespace bind mounts into install_root
+#------------------------------------------------------------------------------
+# All /dev,/sys,/proc binds MUST exist only inside the unshare mount namespace.
+# If they ever exist in the host namespace (e.g. previous failed run), ZFS export
+# and mdadm teardown can become "busy" in ways that are hard to diagnose.
+ensure_no_host_target_mounts() {
+  local mnt
+  for mnt in \
+    "$install_root/dev" \
+    "$install_root/sys" \
+    "$install_root/proc" \
+    "$install_root/run" \
+    "$install_root/dev/pts"
+  do
+    if mountpoint -q "$mnt" 2>/dev/null; then
+      warn "Host namespace mount detected at $mnt — unmounting (should only exist inside unshare)"
+      umount -R "$mnt" 2>/dev/null || true
+    fi
+  done
+}
+
+#------------------------------------------------------------------------------
 # Pre-flight checks
 #------------------------------------------------------------------------------
 preflight_checks() {
@@ -447,6 +469,9 @@ EOF
 chroot_install() {
   info "Setting up chroot environment with namespace isolation..."
 
+  # Enforce: no host-namespace binds under install_root before entering unshare
+  ensure_no_host_target_mounts
+
   # Copy resolv.conf for network access in chroot
   cp /etc/resolv.conf "$install_root/etc/resolv.conf"
 
@@ -788,6 +813,10 @@ CHROOT_SCRIPT
   cat > "$install_root/tmp/ns-wrapper.sh" << NSWRAPPER
 #!/bin/bash
 set -euo pipefail
+# Make mount propagation private inside this namespace BEFORE any bind mounts.
+# This matches arch-chroot style isolation and avoids mount-propagation weirdness.
+mount --make-rprivate /
+
 # Bind-mount virtual filesystems inside the mount namespace
 mount --rbind /dev  "$install_root/dev"
 mount --rbind /sys  "$install_root/sys"
@@ -866,6 +895,9 @@ main() {
   extract_squashfs
   install_kernel
   configure_system
+
+  # Final guard before chroot phase: host must not have binds under install_root
+  ensure_no_host_target_mounts
   chroot_install
   final_cleanup
 
