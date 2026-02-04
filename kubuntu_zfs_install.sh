@@ -809,7 +809,7 @@ CHROOT_SCRIPT
 
   chmod +x "$install_root/tmp/chroot-install.sh"
 
-  # Create namespace wrapper script that bind-mounts inside a private namespace
+  # Create a namespace wrapper script that bind-mounts inside a private namespace
   cat > "$install_root/tmp/ns-wrapper.sh" << NSWRAPPER
 #!/bin/bash
 set -euo pipefail
@@ -841,6 +841,7 @@ NSWRAPPER
 # Cleanup and prepare for reboot
 #------------------------------------------------------------------------------
 final_cleanup() {
+  local mnt
   info "Final cleanup..."
 
   # Defensive teardown of dev/proc/sys in case namespace cleanup didn't fire
